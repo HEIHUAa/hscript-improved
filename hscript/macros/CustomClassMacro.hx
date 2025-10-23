@@ -507,6 +507,7 @@ class CustomClassMacro {
 		Context.defineModule(cl.module, [shadowClass], null);
 	}
 
+	// Based on Polymod HScriptClass Macro: https://github.com/larsiusprime/polymod/blob/develop/polymod/hscript/_internal/HScriptedClassMacro.hx#L686
 	private static function overrideField(field:ClassField, cl:ClassType, ?type:haxe.macro.Type, ?params:Map<String, haxe.macro.Type>):Array<Field> {
 		if(type == null)
 			type = field.type;
