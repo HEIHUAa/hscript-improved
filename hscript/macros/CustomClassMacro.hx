@@ -99,7 +99,7 @@ class CustomClassMacro {
 					var fkey = '${cl.module}.${cl.name}';
 					if (classesToBuild.exists(fkey) && classesToBuild.get(fkey).params == null) {
 						classesToApply.push(cl);
-					} 
+					}
 					/*
 					if(cl.isAbstract || cl.isExtern || cl.isFinal || cl.isInterface) continue;
 					if(!cl.name.endsWith("_Impl_") && !cl.name.endsWith(CLASS_SUFFIX) && !cl.name.endsWith("_HSC")) {
@@ -123,10 +123,14 @@ class CustomClassMacro {
 
 	private static function buildClass(cl:ClassType) {
 		var classFields:Array<ClassField> = cl.fields.get();
-		var classParams:Map<String, haxe.macro.Type> = cl.params.length == 0 ? [] : [
-			for (i in 0...cl.params.length)
-				'${cl.pack.join(".")}.${cl.name}.${cl.params[i].name}' => cl.params[i].t
-		];
+		var classParams:Map<String, haxe.macro.Type> = [];
+		if (cl.params.length != 0) {
+			for (i => p in cl.params) {
+				var pName = '${cl.pack.join(".")}.${cl.name}.${p.name}';
+				classParams.set(pName, p.t);
+			}
+		}
+		
 		var fields:Array<ClassField> = classFields.concat(getSuperFields(cl));
 
 		var shadowClass:TypeDefinition = macro class {
@@ -181,7 +185,7 @@ class CustomClassMacro {
 						case MethInline | MethDynamic | MethMacro: continue;
 						default:
 					}
-				case FVar(read, write):
+				case FVar(_, _):
 					continue;
 			}
 			
@@ -223,11 +227,18 @@ class CustomClassMacro {
 		], false, true, false);
 		
 		var fkey = '${cl.module}.${cl.name}';
-		var imports = classesToBuild[fkey].imports;
+		var imports = classesToBuild.get(fkey).imports;
 		if(imports != null) {
 			Utils.setupMetas(shadowClass, imports);
 			Utils.processImport(imports, "hscript.utils.UnsafeReflect", "UnsafeReflect");
 		}
+
+		shadowClass.fields.push({
+			name: "__cachedFieldSet",
+			pos: cl.pos,
+			kind: FVar(macro: Map<String, Dynamic>),
+			access: [APublic, AStatic]
+		});
 
 		shadowClass.fields.push({
 			name: "__interp",
@@ -306,7 +317,7 @@ class CustomClassMacro {
 		});
 
 		if(cl.name == "FunkinShader" || cl.name == "CustomShader" || cl.name == "MultiThreadedScript") {
-			Context.defineModule(cl.module, [shadowClass], null);
+			Context.defineModule(cl.module, [shadowClass], imports);
 			return;
 		}
 
@@ -522,22 +533,26 @@ class CustomClassMacro {
 						case TInst(t, p):
 							var tp = t.get();
 							if (tp != null && tp.isPrivate) return [];
+						default:
 					}
 				// Inline functions are already skipped
 				// As well for "@:generic" fields
 
 				var fnInputArgs:Array<FunctionArg> = [];
 
+				// We only get limited information about the args from Type, we need to use TypedExprDef.
+
 				if(field.expr() == null) return [];
 
 				var fnAccess:Array<Access> = [field.isPublic ? APublic : APrivate];
+				if(field.isFinal) fnAccess.push(AFinal);
 
 				switch(field.expr().expr) {
 					case TFunction(tfunc):
 						for(arg in tfunc.args) {
-							var opt = (arg.value != null);
-							var fnMeta = arg.v.meta.get();
-							var fnExpr:Expr = arg.value == null ? null : Context.getTypedExpr(arg.value);
+							var opt:Bool = (arg.value != null);
+							var fnMeta:Metadata = arg.v.meta.get();
+							var fnExpr:Null<Expr> = !opt ? null : Context.getTypedExpr(arg.value);
 							// The argument type. We have to handle any type parameters, and deparameterizeType does so recursively.
 							var fnType:ComplexType = Context.toComplexType(deparameterizeType(arg.v.t, params)); // TODO
 
@@ -551,18 +566,19 @@ class CustomClassMacro {
 							fnInputArgs.push(fnArg);
 						}
 					case TConst(_):
+						// This is actually a VARIABLE storing a function.
 						return [];
 					default:
 				}
 
 				// TODO
 
-				var returnsVoid:Bool = ret.toString() == "Void";
+				var returnsVoid:Bool = Context.toComplexType(ret).match(TPath({name: "Void"}));
 
 				var fnCall:Array<Expr> = [for(a in args) macro $i{a.name}];
 				var fnParams:Array<TypeParamDecl> = [for(fp in field.params) {name: fp.name}];
-				var fnRet = returnsVoid ? null : Context.toComplexType(deparameterizeType(ret, params));
-				var fnName = field.name;
+				var fnRet:Null<ComplexType> = returnsVoid ? null : Context.toComplexType(deparameterizeType(ret, params));
+				var fnName:String = field.name;
 
 				var overField:Field = {
 					name: fnName,
@@ -608,10 +624,11 @@ class CustomClassMacro {
 						args: fnInputArgs,
 						params: fnParams,
 						ret: fnRet,
-						expr: returnsVoid ? {
-							macro return super.$fnName($a{fnCall});
-						} : {
-							macro super.$fnName($a{fnCall});
+						expr: macro {
+							$
+							{
+								!returnsVoid ? (macro return super.$fnName($a{fnCall})) : (macro super.$fnName($a{fnCall}))
+							}
 						}
 					})
 				}
@@ -682,8 +699,8 @@ class CustomClassMacro {
 		return result;
 	}
 
-	static function scanBaseTypes(targetType:haxe.macro.Type):Array<haxe.macro.Type> {
-		switch (targetType) {
+	static function scanBaseTypes(type:haxe.macro.Type):Array<haxe.macro.Type> {
+		switch (type) {
 			case TFun(args, ret):
 				var results:Array<haxe.macro.Type> = [];
 
@@ -698,7 +715,7 @@ class CustomClassMacro {
 				return results;
 			case TAbstract(ty, params):
 				if (params.length == 0) {
-					return [targetType];
+					return [type];
 				} else {
 					var results:Array<haxe.macro.Type> = [];
 					for (param in params) {
@@ -709,7 +726,7 @@ class CustomClassMacro {
 					return results;
 				}
 			default:
-				return [targetType];
+				return [type];
 		}
 	}
 
@@ -755,9 +772,7 @@ class CustomClassMacro {
 
 						for (baseType in baseTypes) {
 							var newParam = deparameterizeType(baseType, targetParams);
-							if (newParam.toString() == "Void") {
-								// Skipping Void...
-							} else {
+							if (newParam.toString() != "Void") {
 								oldParams.push(baseType);
 								newParams.push(newParam);
 							}
@@ -770,11 +785,7 @@ class CustomClassMacro {
 						// Context.info('Building new abstract (${baseParams} + ${newParams})...', Context.currentPos());
 						resultType = resultType.applyTypeParameters(baseParams, newParams);
 						// Context.info('Deparameterized abstract type: ${resultType.toString()}', Context.currentPos());
-					} else {
-						// Leave the type as is.
 					}
-				} else {
-					// Else, there are no parameters related this type and we don't need to mutate it.
 				}
 			case TInst(ty, params):
 				// Instance type. Used by most variables.
@@ -793,9 +804,7 @@ class CustomClassMacro {
 
 						for (baseType in baseTypes) {
 							var newParam = deparameterizeType(baseType, targetParams);
-							if (newParam.toString() == "Void") {
-								// Skipping Void...
-							} else {
+							if (newParam.toString() != "Void") {
 								oldParams.push(baseType);
 								newParams.push(newParam);
 							}
@@ -811,14 +820,11 @@ class CustomClassMacro {
 					} else {
 						// Leave the type as is.
 					}
-				} else {
-					// Else, there are no parameters related this type and we don't need to mutate it.
 				}
 
 			default:
 				// Do nothing.
 				// Muted because I haven't actually seen any issues caused by this. Maybe investigate in the future.
-				// Context.warning('You failed to handle this! ${targetType}', Context.currentPos());
 		}
 
 		return resultType;
@@ -839,7 +845,7 @@ class CustomClassMacro {
 		return fields;
 	}
 
-	private static function buildConstructor(args:Array<FunctionArg>, pos):Field {
+	private static function buildConstructor(args:Array<FunctionArg>, pos:Position):Field {
 		var superCallArgs:Array<Expr> = [for (arg in args) macro $i{arg.name}];
 
 		return {
@@ -851,6 +857,14 @@ class CustomClassMacro {
 				expr: macro {
 					// Call the super constructor with appropriate args
 					super($a{superCallArgs});
+
+					if(__cachedFieldSet != null) {
+						for(k => v in __cachedFieldSet) {
+							Reflect.setProperty(this, k, v);
+						}
+						__cachedFieldSet.clear();
+						__cachedFieldSet = null;
+					}
 				}
 			}),
 		}
