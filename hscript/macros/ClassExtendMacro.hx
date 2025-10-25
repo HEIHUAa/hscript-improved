@@ -26,9 +26,11 @@ class ClassExtendMacro {
 		#if !display
 		#if CUSTOM_CLASSES
 		if(Context.defined("display")) return;
+		/*
 		for(apply in Config.ALLOWED_CUSTOM_CLASSES) {
 			Compiler.addGlobalMetadata(apply, "@:build(hscript.macros.ClassExtendMacro.build())");
 		}
+		*/
 		//Context.onAfterTyping(buildTyped);
 		#end
 		#end

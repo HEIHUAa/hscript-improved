@@ -1,3 +1,4 @@
 --macro keep('IntIterator')
 --macro hscript.macros.AbstractHandler.init()
 --macro hscript.macros.ClassExtendMacro.init()
+--macro hscript.macros.CustomClassMacro.init()
