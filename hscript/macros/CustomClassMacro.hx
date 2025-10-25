@@ -1,4 +1,5 @@
 package hscript.macros;
+
 import haxe.macro.Type.Ref;
 #if macro
 import haxe.macro.Type.ClassType;
@@ -25,20 +26,21 @@ typedef ClassInfo = {
 
 @:nullSafety(Loose)
 class CustomClassMacro {
-    public static inline final FUNC_PREFIX = "_HX_SUPER__";
+	public static inline final FUNC_PREFIX = "_HX_SUPER__";
 	public static inline final CLASS_SUFFIX = "_HSX";
 
 	public static var unallowedMetas:Array<String> = [":bitmap", ":noCustomClass", ":generic"];
 	private static var classesToBuild:Map<String, ClassInfo> = [];
 
-    public static function init() {
+	public static function init() {
 		#if !display
 		#if CUSTOM_CLASSES
-		if(Context.defined("display")) return;
-		for(apply in Config.ALLOWED_CUSTOM_CLASSES) {
-			//Compiler.addGlobalMetadata(apply, "@:build(hscript.macros.CustomClassMacro.fetchClass())");
+		if (Context.defined("display"))
+			return;
+		for (apply in Config.ALLOWED_CUSTOM_CLASSES) {
+			Compiler.addGlobalMetadata(apply, "@:build(hscript.macros.CustomClassMacro.fetchClass())");
 		}
-		//Context.onAfterTyping(build);
+		Context.onAfterTyping(build);
 		#end
 		#end
 	}
@@ -46,13 +48,15 @@ class CustomClassMacro {
 	public static function fetchClass():Array<Field> {
 		var fields = Context.getBuildFields();
 		var clRef = Context.getLocalClass();
-		if (clRef == null) return fields;
+		if (clRef == null)
+			return fields;
 		var cl = clRef.get();
-		if (cl.isAbstract || cl.isExtern || cl.isFinal || cl.isInterface) return fields;
+		if (cl.isAbstract || cl.isExtern || cl.isFinal || cl.isInterface)
+			return fields;
 		if (!cl.name.endsWith("_Impl_") && !cl.name.endsWith(CLASS_SUFFIX) && !cl.name.endsWith("_HSC")) {
 			var metas = cl.meta.get();
 
-			for(m in metas)
+			for (m in metas)
 				if (unallowedMetas.contains(m.name))
 					return fields;
 
@@ -61,17 +65,28 @@ class CustomClassMacro {
 
 			var key = cl.module;
 			var fkey = '${cl.module}.${cl.name}';
-			if(key == "sys.thread.FixedThreadPool") return fields; // Error: Type name sys.thread.Worker_HSX is redefined from module sys.thread.FixedThreadPool
-			if(key == "StdTypes") return fields; // Error: Cant extend basic class
-			if(key == "Xml") return fields; // Error: Cant extend basic class
-			if(key == "Date") return fields; // Error: Cant extend basic class
-			if(key == "away3d.tools.commands.Mirror") return fields; // Error: Unknown identifier
-			if(key == "away3d.tools.commands.SphereMaker") return fields; // Error: Unknown identifier
-			if(key == "away3d.tools.commands.Weld") return fields; // Error: Unknown identifier
-			if(fkey == "hscript.CustomClassHandler.TemplateClass") return fields; // Error: Redefined
-			if(fkey == "hscript.CustomClassHandler.CustomTemplateClass") return fields; // Error: Redefined
-			if(fkey == "hscript.CustomClass") return fields; // Error: Redefined
-			if(key == "sys.thread.EventLoop") return fields; // Error: cant override force inlined
+			if (key == "sys.thread.FixedThreadPool")
+				return fields; // Error: Type name sys.thread.Worker_HSX is redefined from module sys.thread.FixedThreadPool
+			if (key == "StdTypes")
+				return fields; // Error: Cant extend basic class
+			if (key == "Xml")
+				return fields; // Error: Cant extend basic class
+			if (key == "Date")
+				return fields; // Error: Cant extend basic class
+			if (key == "away3d.tools.commands.Mirror")
+				return fields; // Error: Unknown identifier
+			if (key == "away3d.tools.commands.SphereMaker")
+				return fields; // Error: Unknown identifier
+			if (key == "away3d.tools.commands.Weld")
+				return fields; // Error: Unknown identifier
+			if (fkey == "hscript.CustomClassHandler.TemplateClass")
+				return fields; // Error: Redefined
+			if (fkey == "hscript.CustomClassHandler.CustomTemplateClass")
+				return fields; // Error: Redefined
+			if (fkey == "hscript.CustomClass")
+				return fields; // Error: Redefined
+			if (key == "sys.thread.EventLoop")
+				return fields; // Error: cant override force inlined
 			if (Config.DISALLOW_CUSTOM_CLASSES.contains(key) || Config.DISALLOW_CUSTOM_CLASSES.contains(fkey))
 				return fields;
 			if (key.contains("_"))
@@ -91,16 +106,17 @@ class CustomClassMacro {
 	// called in an onAfterTyping callback
 	public static function build(modules:Array<ModuleType>) {
 		var classesToApply:Array<ClassType> = [];
-		for(m in modules) {
+		for (m in modules) {
 			switch (m) {
 				case TClassDecl(c):
-					if(c == null) continue;
+					if (c == null)
+						continue;
 					var cl = c.get();
 					var fkey = '${cl.module}.${cl.name}';
-					if (classesToBuild.exists(fkey) && classesToBuild.get(fkey).params == null) {
+					if (classesToBuild.exists(fkey) /*&& classesToBuild.get(fkey).params == null*/) {
 						classesToApply.push(cl);
 					}
-					/*
+				/*
 					if(cl.isAbstract || cl.isExtern || cl.isFinal || cl.isInterface) continue;
 					if(!cl.name.endsWith("_Impl_") && !cl.name.endsWith(CLASS_SUFFIX) && !cl.name.endsWith("_HSC")) {
 						var fkey = '${cl.module}.${cl.name}';
@@ -108,16 +124,17 @@ class CustomClassMacro {
 							classesToApply.push(cl);
 						} 
 					}
-					*/
+				 */
 				default:
 			}
 		}
 
-		if(classesToApply.length > 0) buildClasses(classesToApply);
+		if (classesToApply.length > 0)
+			buildClasses(classesToApply);
 	}
 
-	private static function buildClasses(classes:Array<ClassType>)  {
-		for(cl in classes) 
+	private static function buildClasses(classes:Array<ClassType>) {
+		for (cl in classes)
 			buildClass(cl);
 	}
 
@@ -127,59 +144,58 @@ class CustomClassMacro {
 		if (cl.params.length != 0) {
 			for (i => p in cl.params) {
 				var pName = '${cl.pack.join(".")}.${cl.name}.${p.name}';
-				classParams.set(pName, p.t);
+				var pFinalType = p.defaultType == null ? haxe.macro.Type.TDynamic(null) : p.defaultType;
+				classParams.set(pName, pFinalType);
 			}
 		}
-		
+
 		var fields:Array<ClassField> = classFields.concat(getSuperFields(cl));
 
-		var shadowClass:TypeDefinition = macro class {
-
-		};
+		var shadowClass:TypeDefinition = macro class {};
 
 		var definedFields:Array<String> = [];
 		var hasNew:Bool = false;
 
-		for(f in fields) {
-			if(f == null) continue;
+		if (cl.constructor != null) {
+			hasNew = true;
+			var constField = cl.constructor.get();
+			switch (constField.type) {
+				case TFun(args, ret):
+					var constArgs:Array<FunctionArg> = [
+						for (arg in args)
+							{name: arg.name, opt: arg.opt, type: Context.toComplexType(arg.t)}
+					];
 
-			if(f.name == "new") {
-				hasNew = true;
-				switch(f.type) {
-					case TFun(args, ret):
-						var constArgs:Array<FunctionArg> = [
-							for (arg in args)
-								{name: arg.name, opt: arg.opt, type: Context.toComplexType(arg.t)}
-						];
+					var constructor:Field = buildConstructor(constArgs, constField.pos);
+					shadowClass.fields.push(constructor);
+					definedFields.push(constField.name); // kinda redundant since is the constructor
+				case TLazy(builder):
+					var v = builder();
+					switch (v) {
+						case TFun(args, ret):
+							var constArgs:Array<FunctionArg> = [
+								for (arg in args)
+									{name: arg.name, opt: arg.opt, type: Context.toComplexType(arg.t)}
+							];
 
-						var constructor:Field = buildConstructor(constArgs, f.pos);
-						shadowClass.fields.push(constructor);
-						definedFields.push(f.name);
-					case TLazy(builder):
-						var v = builder();
-						switch(v) {
-							case TFun(args, ret):
-								var constArgs:Array<FunctionArg> = [
-									for (arg in args)
-										{name: arg.name, opt: arg.opt, type: Context.toComplexType(arg.t)}
-								];
-
-								var constructor:Field = buildConstructor(constArgs, f.pos);
-								shadowClass.fields.push(constructor);
-								definedFields.push(f.name);
-							default:
-								continue;
-						}
-					default: 
-						continue;
-				}
-				continue;
+							var constructor:Field = buildConstructor(constArgs, constField.pos);
+							shadowClass.fields.push(constructor);
+							definedFields.push(constField.name);
+						default:
+					}
+				default:
 			}
-			if(f.name.startsWith(FUNC_PREFIX))
+		}
+
+		for (f in fields) {
+			if (f == null)
 				continue;
-			if(f.isExtern || f.isFinal) 
+
+			if (f.name.startsWith(FUNC_PREFIX))
 				continue;
-			switch(f.kind) {
+			if (f.isExtern || f.isFinal)
+				continue;
+			switch (f.kind) {
 				case FMethod(k):
 					switch (k) {
 						case MethInline | MethDynamic | MethMacro: continue;
@@ -188,12 +204,14 @@ class CustomClassMacro {
 				case FVar(_, _):
 					continue;
 			}
-			
-			if(f.name == "hget" || f.name == "hset") continue;
-			if(definedFields.contains(f.name)) continue;
 
-			for(m in f.meta.get())
-				if(unallowedMetas.contains(m.name))
+			if (f.name == "hget" || f.name == "hset")
+				continue;
+			if (definedFields.contains(f.name))
+				continue;
+
+			for (m in f.meta.get())
+				if (unallowedMetas.contains(m.name))
 					continue;
 
 			switch (f.kind) {
@@ -213,36 +231,44 @@ class CustomClassMacro {
 					definedFields.push(f.name);
 				default:
 					// No :>
-			}	
+			}
 		}
 
-		if(definedFields.length == 0 && !hasNew) 
-			return;
-		
+		if (definedFields.length == 0 && !hasNew) return;
+
 		shadowClass.kind = TDClass({
 			pack: cl.pack.copy(),
-			name: cl.name
+			name: cl.name,
+			params: cl.params.length == 0 ? null : [
+				for (s => p in classParams)
+					switch (p) {
+						case TInst(_.get() => {kind: KExpr(e)}, _):
+							TPExpr(e);
+						default:
+							TPType(FixedTypeTools.toComplexType(p));
+					}
+			]
 		}, [
 			{name: "IHScriptCustomClassBehaviour", pack: ["hscript"]}
 		], false, true, false);
-		
+		shadowClass.name = '${cl.name}$CLASS_SUFFIX';
 		var fkey = '${cl.module}.${cl.name}';
 		var imports = classesToBuild.get(fkey).imports;
-		if(imports != null) {
-			Utils.setupMetas(shadowClass, imports);
-			Utils.processImport(imports, "hscript.utils.UnsafeReflect", "UnsafeReflect");
+		if (imports != null) {
+			setupMetas(shadowClass, imports, cl);
+			processImport(imports, "hscript.utils.UnsafeReflect", "UnsafeReflect", cl.pos);
 		}
 
 		shadowClass.fields.push({
 			name: "__cachedFieldSet",
 			pos: cl.pos,
-			kind: FVar(macro: Map<String, Dynamic>),
+			kind: FVar(macro :Map<String, Dynamic>),
 			access: [APublic, AStatic]
 		});
 
 		shadowClass.fields.push({
 			name: "__interp",
-			kind: FVar(macro: hscript.Interp),
+			kind: FVar(macro :hscript.Interp),
 			pos: cl.pos,
 			access: [APublic]
 		});
@@ -316,7 +342,7 @@ class CustomClassMacro {
 			access: [APublic]
 		});
 
-		if(cl.name == "FunkinShader" || cl.name == "CustomShader" || cl.name == "MultiThreadedScript") {
+		if (cl.name == "FunkinShader" || cl.name == "CustomShader" || cl.name == "MultiThreadedScript") {
 			Context.defineModule(cl.module, [shadowClass], imports);
 			return;
 		}
@@ -326,10 +352,13 @@ class CustomClassMacro {
 
 		// TODO: hget & hset
 
-		for(f in fields) {
-			if(f.name == "new") continue;
-			if(f.name.startsWith(FUNC_PREFIX)) continue;
-			if(f.isExtern || f.isFinal) continue;
+		for (f in fields) {
+			if (f.name == "new")
+				continue;
+			if (f.name.startsWith(FUNC_PREFIX))
+				continue;
+			if (f.isExtern || f.isFinal)
+				continue;
 			switch (f.kind) {
 				case FMethod(k):
 					switch (k) {
@@ -343,14 +372,15 @@ class CustomClassMacro {
 					}
 			}
 
-			switch(f.type) {
+			switch (f.type) {
 				case TFun(args, ret):
-					if(f.params != null && f.params.length > 0) continue;
+					if (f.params != null && f.params.length > 0)
+						continue;
 
 					hasHgetInSuper = f.name == "hget";
 					hasHsetInSuper = f.name == "hset";
 
-					if(hasHgetInSuper && hasHsetInSuper)
+					if (hasHgetInSuper && hasHsetInSuper)
 						break;
 				default:
 			}
@@ -515,15 +545,22 @@ class CustomClassMacro {
 			})
 		});
 
-		Context.defineModule(cl.module, [shadowClass], null);
+		/*
+			var p = new Printer();
+			var aa = p.printTypeDefinition(shadowClass);
+			trace('\n');
+			trace(aa);
+		 */
+
+		Context.defineModule(cl.module, [shadowClass], imports);
 	}
 
 	// Based on Polymod HScriptClass Macro: https://github.com/larsiusprime/polymod/blob/develop/polymod/hscript/_internal/HScriptedClassMacro.hx#L686
 	private static function overrideField(field:ClassField, cl:ClassType, ?type:haxe.macro.Type, ?params:Map<String, haxe.macro.Type>):Array<Field> {
-		if(type == null)
+		if (type == null)
 			type = field.type;
 
-		switch(type) {
+		switch (type) {
 			case TLazy(f):
 				var fv = f();
 				return overrideField(field, cl, fv, params);
@@ -542,19 +579,21 @@ class CustomClassMacro {
 
 				// We only get limited information about the args from Type, we need to use TypedExprDef.
 
-				if(field.expr() == null) return [];
+				if (field.expr() == null)
+					return [];
 
 				var fnAccess:Array<Access> = [field.isPublic ? APublic : APrivate];
-				if(field.isFinal) fnAccess.push(AFinal);
+				if (field.isFinal)
+					fnAccess.push(AFinal);
 
-				switch(field.expr().expr) {
+				switch (field.expr().expr) {
 					case TFunction(tfunc):
-						for(arg in tfunc.args) {
+						for (arg in tfunc.args) {
 							var opt:Bool = (arg.value != null);
 							var fnMeta:Metadata = arg.v.meta.get();
 							var fnExpr:Null<Expr> = !opt ? null : Context.getTypedExpr(arg.value);
 							// The argument type. We have to handle any type parameters, and deparameterizeType does so recursively.
-							var fnType:ComplexType = Context.toComplexType(deparameterizeType(arg.v.t, params)); // TODO
+							var fnType:ComplexType = Context.toComplexType(deparameterizeType(arg.v.t, params));
 
 							var fnArg:FunctionArg = {
 								name: arg.v.name,
@@ -573,10 +612,10 @@ class CustomClassMacro {
 
 				// TODO
 
-				var returnsVoid:Bool = Context.toComplexType(ret).match(TPath({name: "Void"}));
+				var returnsVoid:Bool = ret.toString() == "Void";
 
-				var fnCall:Array<Expr> = [for(a in args) macro $i{a.name}];
-				var fnParams:Array<TypeParamDecl> = [for(fp in field.params) {name: fp.name}];
+				var fnCall:Array<Expr> = [for (a in args) macro $i{a.name}];
+				var fnParams:Array<TypeParamDecl> = [for (fp in field.params) {name: fp.name}];
 				var fnRet:Null<ComplexType> = returnsVoid ? null : Context.toComplexType(deparameterizeType(ret, params));
 				var fnName:String = field.name;
 
@@ -596,9 +635,7 @@ class CustomClassMacro {
 								var v:Dynamic = null;
 								if (Reflect.isFunction(v = __interp.variables.get(name))) {
 									${
-										!returnsVoid 
-										? (macro return v($a{fnCall})) 
-										: macro {
+										!returnsVoid ? (macro return v($a{fnCall})) : macro {
 											v($a{fnCall});
 											return;
 										}
@@ -607,9 +644,7 @@ class CustomClassMacro {
 							}
 
 							${
-								!returnsVoid 
-								? (macro return super.$fnName($a{fnCall})) 
-								: (macro super.$fnName($a{fnCall}))
+								!returnsVoid ? (macro return super.$fnName($a{fnCall})) : (macro super.$fnName($a{fnCall}))
 							}
 						}
 					})
@@ -625,8 +660,7 @@ class CustomClassMacro {
 						params: fnParams,
 						ret: fnRet,
 						expr: macro {
-							$
-							{
+							${
 								!returnsVoid ? (macro return super.$fnName($a{fnCall})) : (macro super.$fnName($a{fnCall}))
 							}
 						}
@@ -636,22 +670,20 @@ class CustomClassMacro {
 				return [overField, superFunField];
 
 			/* case TInst(_, _): return [];
-			case TEnum(_, _): return [];
-			case TMono(_): return [];
-			case TAnonymous(_): return [];
-			case TDynamic(_): return [];
-			case TAbstract(_, _): return []; */
+				case TEnum(_, _): return [];
+				case TMono(_): return [];
+				case TAnonymous(_): return [];
+				case TDynamic(_): return [];
+				case TAbstract(_, _): return []; */
 			default:
 		}
 		return [];
 	}
 
-	static function getBaseParamsOfType(parentType:haxe.macro.Type, paramTypes:Array<haxe.macro.Type>):Array<haxe.macro.Type.TypeParameter>
-	{
+	static function getBaseParamsOfType(parentType:haxe.macro.Type, paramTypes:Array<haxe.macro.Type>):Array<haxe.macro.Type.TypeParameter> {
 		var parentParams:Array<haxe.macro.Type.TypeParameter> = [];
 
-		switch (parentType)
-		{
+		switch (parentType) {
 			case TMono(t):
 				var ty = t.get();
 				return getBaseParamsOfType(ty, paramTypes);
@@ -682,13 +714,12 @@ class CustomClassMacro {
 			// case TFun(args:Array<{name:String, opt:Bool, t:Type}>, ret:Type):
 			// case TAnonymous(a:Ref<AnonType>):
 			default:
-				//Context.error('Unsupported type: ${parentType}', Context.currentPos());
+				// Context.error('Unsupported type: ${parentType}', Context.currentPos());
 		}
 
 		var result:Array<haxe.macro.Type.TypeParameter> = [];
 
-		for (i => parentParam in parentParams)
-		{
+		for (i => parentParam in parentParams) {
 			var newParam:haxe.macro.Type.TypeParameter = {
 				name: parentParam.name,
 				t: paramTypes[i],
@@ -833,15 +864,15 @@ class CustomClassMacro {
 	private static function getSuperFields(cl:ClassType):Array<ClassField> {
 		var fields:Array<ClassField> = [];
 		var superClsRef = cl.superClass;
-		while(superClsRef != null) {
+		while (superClsRef != null) {
 			var superCls:ClassType = superClsRef.t.get();
 			fields = fields.concat(superCls.fields.get());
 			var next = superCls.superClass;
-			if(next == null)
+			if (next == null)
 				break;
 			superClsRef = next;
 		}
-		
+
 		return fields;
 	}
 
@@ -858,8 +889,8 @@ class CustomClassMacro {
 					// Call the super constructor with appropriate args
 					super($a{superCallArgs});
 
-					if(__cachedFieldSet != null) {
-						for(k => v in __cachedFieldSet) {
+					if (__cachedFieldSet != null) {
+						for (k => v in __cachedFieldSet) {
 							Reflect.setProperty(this, k, v);
 						}
 						__cachedFieldSet.clear();
@@ -869,10 +900,94 @@ class CustomClassMacro {
 			}),
 		}
 	}
+
+	// Grabbed from Utils.hx
+	static function setupMetas(shadowClass:TypeDefinition, imports:Array<ImportExpr>, cl:ClassType) {
+		shadowClass.meta = [
+			{
+				name: ":dox",
+				params: [macro hide],
+				pos: cl.pos
+			},
+			{
+				name: ":noCompletion",
+				params: [],
+				pos: cl.pos
+			}
+		];
+		var module = Context.getModule(cl.module);
+		for (m in module)
+			switch (m) {
+				case TInst(t, params):
+					if (t == null)
+						continue;
+					var ty = t.get();
+					processModule(shadowClass, ty.module, ty.name, cl.pos);
+					processImport(imports, ty.module, ty.name, cl.pos);
+				case TEnum(t, params):
+					if (t == null)
+						continue;
+					var ty = t.get();
+					processModule(shadowClass, ty.module, ty.name, cl.pos);
+					processImport(imports, ty.module, ty.name, cl.pos);
+				case TType(t, params):
+					if (t == null)
+						continue;
+					var ty = t.get();
+					processModule(shadowClass, ty.module, ty.name, cl.pos);
+					processImport(imports, ty.module, ty.name, cl.pos);
+				case TAbstract(t, params):
+					if (t == null)
+						continue;
+					var ty = t.get();
+					processModule(shadowClass, ty.module, ty.name, cl.pos);
+					processImport(imports, ty.module, ty.name, cl.pos);
+				default:
+			}
+	}
+
+	static function processImport(imports:Array<ImportExpr>, module:String, n:String, pos:Position) {
+		if (n.endsWith("_Impl_"))
+			n = n.substr(0, n.length - 6);
+		module = fixModuleName(module);
+		if (module.endsWith("_Impl_"))
+			module = module.substr(0, module.length - 6);
+
+		trace(module);
+		imports.push({
+			path: [
+				for (m in module.split("."))
+					{
+						name: m,
+						pos: pos
+					}
+			],
+			mode: INormal
+		});
+	}
+
+	static function processModule(shadowClass:TypeDefinition, module:String, n:String, pos:Position) {
+		if (n.endsWith("_Impl_"))
+			n = n.substr(0, n.length - 6);
+		if (module.endsWith("_Impl_"))
+			module = module.substr(0, module.length - 6);
+
+		shadowClass.meta.push({
+			name: ':access',
+			params: [
+				Context.parse(fixModuleName(module.endsWith('.${n}') ? module : '${module}.${n}'), pos)
+			],
+			pos: pos
+		});
+	}
+
+	static function fixModuleName(name:String):String {
+		return [for (s in name.split(".")) if (s.charAt(0) == "_") s.substr(1) else s].join(".");
+	}
 }
 #else
 class CustomClassMacro {
-    public var usedClass:Class<Dynamic>;
+	public var usedClass:Class<Dynamic>;
 	public var className:String;
 }
 #end
