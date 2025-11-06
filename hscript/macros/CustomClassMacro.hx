@@ -93,6 +93,11 @@ class CustomClassMacro {
 				return fields;
 
 			var imports = Context.getLocalImports().copy();
+			for(imp in imports) {
+				trace('$fkey');
+				trace('import ${[for(i in imp.path) i.name].join(".")}');
+				trace('\n');
+			}
 			var clsDecl:ClassInfo = {
 				imports: imports,
 				params: cl.params.length > 0 ? cl.params : null
@@ -139,6 +144,7 @@ class CustomClassMacro {
 	}
 
 	private static function buildClass(cl:ClassType) {
+		trace('building ${cl.module}.${cl.name} class');
 		var classFields:Array<ClassField> = cl.fields.get();
 		var classParams:Map<String, haxe.macro.Type> = [];
 		if (cl.params.length != 0) {
@@ -151,7 +157,39 @@ class CustomClassMacro {
 
 		var fields:Array<ClassField> = classFields.concat(getSuperFields(cl));
 
-		var shadowClass:TypeDefinition = macro class {};
+		var shadowClass:TypeDefinition = macro class {
+
+		};
+
+		trace('${cl.name} - setting shadowclass');
+
+		shadowClass.kind = TDClass({
+			pack: cl.pack.copy(),
+			name: cl.name,
+			params: cl.params.length == 0 ? null : [
+				for (s => p in classParams)
+					switch (p) {
+						case TInst(_.get() => {kind: KExpr(e)}, _):
+							TPExpr(e);
+						default:
+							TPType(FixedTypeTools.toComplexType(p));
+					}
+			]
+		}, [
+			{name: "IHScriptCustomClassBehaviour", pack: ["hscript"]}
+		], false, true, false);
+		shadowClass.name = '${cl.name}$CLASS_SUFFIX';
+		var fkey = '${cl.module}.${cl.name}';
+		var imports = classesToBuild.get(fkey).imports;
+		if (imports != null) {
+			setupMetas(shadowClass, imports, cl);
+			processImport(imports, "hscript.utils.UnsafeReflect", "UnsafeReflect", cl.pos);
+		}
+
+		for(imp in imports) {
+			trace('import ${[for(i in imp.path) i.name].join(".")}');
+		}
+		trace(new haxe.macro.Printer().printTypeDefinition(shadowClass));
 
 		var definedFields:Array<String> = [];
 		var hasNew:Bool = false;
@@ -159,6 +197,7 @@ class CustomClassMacro {
 		if (cl.constructor != null) {
 			hasNew = true;
 			var constField = cl.constructor.get();
+			trace('${cl.name} - building constructor');
 			switch (constField.type) {
 				case TFun(args, ret):
 					var constArgs:Array<FunctionArg> = [
@@ -187,6 +226,7 @@ class CustomClassMacro {
 			}
 		}
 
+		trace('${cl.name} - overriding fields');
 		for (f in fields) {
 			if (f == null)
 				continue;
@@ -216,7 +256,8 @@ class CustomClassMacro {
 
 			switch (f.kind) {
 				case FMethod(k):
-					var newFields = overrideField(f, cl, f.type, classParams);
+					var newFields:Array<Field> = overrideField(f, cl, f.type, classParams);
+					if(newFields.length == 0) continue;
 
 					var overField:Field = newFields[0];
 					var superField:Field = newFields[1];
@@ -235,29 +276,6 @@ class CustomClassMacro {
 		}
 
 		if (definedFields.length == 0 && !hasNew) return;
-
-		shadowClass.kind = TDClass({
-			pack: cl.pack.copy(),
-			name: cl.name,
-			params: cl.params.length == 0 ? null : [
-				for (s => p in classParams)
-					switch (p) {
-						case TInst(_.get() => {kind: KExpr(e)}, _):
-							TPExpr(e);
-						default:
-							TPType(FixedTypeTools.toComplexType(p));
-					}
-			]
-		}, [
-			{name: "IHScriptCustomClassBehaviour", pack: ["hscript"]}
-		], false, true, false);
-		shadowClass.name = '${cl.name}$CLASS_SUFFIX';
-		var fkey = '${cl.module}.${cl.name}';
-		var imports = classesToBuild.get(fkey).imports;
-		if (imports != null) {
-			setupMetas(shadowClass, imports, cl);
-			processImport(imports, "hscript.utils.UnsafeReflect", "UnsafeReflect", cl.pos);
-		}
 
 		shadowClass.fields.push({
 			name: "__cachedFieldSet",
@@ -579,14 +597,16 @@ class CustomClassMacro {
 
 				// We only get limited information about the args from Type, we need to use TypedExprDef.
 
-				if (field.expr() == null)
+				// Is failing here
+				var fieldExpr:Null<haxe.macro.Type.TypedExpr> = field.expr();
+				if (fieldExpr == null)
 					return [];
 
 				var fnAccess:Array<Access> = [field.isPublic ? APublic : APrivate];
 				if (field.isFinal)
 					fnAccess.push(AFinal);
 
-				switch (field.expr().expr) {
+				switch (fieldExpr.expr) {
 					case TFunction(tfunc):
 						for (arg in tfunc.args) {
 							var opt:Bool = (arg.value != null);
@@ -953,7 +973,6 @@ class CustomClassMacro {
 		if (module.endsWith("_Impl_"))
 			module = module.substr(0, module.length - 6);
 
-		trace(module);
 		imports.push({
 			path: [
 				for (m in module.split("."))
