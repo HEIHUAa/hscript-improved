@@ -162,9 +162,9 @@ class Interp {
 		// "flixel.FlxG"
 	];
 
-	var usingHandler:UsingHandler;
+	public var optimizer:Optimizer;
 
-	var optimizer:Optimizer;
+	var usingHandler:UsingHandler;
 
 	#if hscriptPos
 	var curExpr:Expr;
