@@ -207,6 +207,7 @@ class Parser {
 			push(tk);
 			parseFullExpr(a);
 		}
+		applyOptimizerSettings();
 		return if( a.length == 1 ) a[0] else mk(EBlock(a),0);
 	}
 
@@ -2559,6 +2560,31 @@ class Parser {
 	public var preprocesorValues(get, set) : Map<String,Dynamic>;
 	inline function get_preprocesorValues() return preprocessorValues;
 	inline function set_preprocesorValues(v) return preprocessorValues = v;
+	
+	function applyOptimizerSettings() {
+		if( optimizer == null ) return;
+		
+		var level = preprocessorValues.get("OPTIMIZE_LEVEL");
+		if( level != null ) optimizer.optimizeLevel = level;
+		
+		var enabled = preprocessorValues.get("OPTIMIZE_ENABLED");
+		if( enabled != null ) optimizer.enabled = enabled;
+		
+		var constantFolding = preprocessorValues.get("OPTIMIZE_CONSTANT_FOLDING");
+		if( constantFolding != null ) optimizer.enableConstantFolding = constantFolding;
+		
+		var simplification = preprocessorValues.get("OPTIMIZE_SIMPLIFICATION");
+		if( simplification != null ) optimizer.enableExpressionSimplification = simplification;
+		
+		var deadCode = preprocessorValues.get("OPTIMIZE_DEAD_CODE");
+		if( deadCode != null ) optimizer.enableDeadCodeElimination = deadCode;
+		
+		var branch = preprocessorValues.get("OPTIMIZE_BRANCH");
+		if( branch != null ) optimizer.enableBranchOptimization = branch;
+		
+		var debug = preprocessorValues.get("OPTIMIZE_DEBUG");
+		if( debug != null ) optimizer.debug = debug;
+	}
 }
 
 @:structInit

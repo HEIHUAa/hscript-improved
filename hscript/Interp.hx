@@ -155,7 +155,7 @@ class Interp {
 	public var enableDeadCodeElimination:Bool = true;
 	public var enableBranchOptimization:Bool = true;
 	
-	public var optimizerDebug:Bool = true;
+	public var optimizerDebug:Bool = false;
 
 	// TODO: move this to an external class
 	public var importBlocklist:Array<String> = [
