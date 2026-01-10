@@ -147,12 +147,24 @@ class Interp {
 	public var allowStaticVariables:Bool = false;
 	public var allowPublicVariables:Bool = false;
 
+	public var optimizeEnabled:Bool = true;
+	public var optimizeLevel:Int = 4;
+	
+	public var enableConstantFolding:Bool = true;
+	public var enableExpressionSimplification:Bool = true;
+	public var enableDeadCodeElimination:Bool = true;
+	public var enableBranchOptimization:Bool = true;
+	
+	public var optimizerDebug:Bool = true;
+
 	// TODO: move this to an external class
 	public var importBlocklist:Array<String> = [
 		// "flixel.FlxG"
 	];
 
 	var usingHandler:UsingHandler;
+
+	var optimizer:Optimizer;
 
 	#if hscriptPos
 	var curExpr:Expr;
@@ -163,6 +175,7 @@ class Interp {
 		declared = [];
 		resetVariables();
 		initOps();
+		optimizer = new Optimizer();
 	}
 
 	private function resetVariables():Void {
@@ -533,7 +546,15 @@ class Interp {
 		depth = 0;
 		locals = new Map();
 		declared = [];
-		return exprReturn(expr);
+		optimizer.enabled = optimizeEnabled;
+		optimizer.optimizeLevel = optimizeLevel;
+		optimizer.enableConstantFolding = enableConstantFolding;
+		optimizer.enableExpressionSimplification = enableExpressionSimplification;
+		optimizer.enableDeadCodeElimination = enableDeadCodeElimination;
+		optimizer.enableBranchOptimization = enableBranchOptimization;
+		optimizer.debug = optimizerDebug;
+		var optimizedExpr = optimizer.optimize(expr);
+		return exprReturn(optimizedExpr);
 	}
 
 	public var printCallStack:Bool = false;
