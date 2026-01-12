@@ -123,13 +123,13 @@ class Interp {
 	public var warnHandler:Error->Void;
 	public var importFailedCallback:Array<String>->Null<String>->Bool;
 
-	public var customClasses:Map<String, CustomClassHandler>;
-	public var variables:Map<String, Dynamic>;
-	public var publicVariables:Map<String, Dynamic>;
-	public var staticVariables:Map<String, Dynamic>;
+	public var customClasses:StringMap <CustomClassHandler>;
+	public var variables:StringMap<Dynamic>;
+	public var publicVariables:StringMap<Dynamic>;
+	public var staticVariables:StringMap<Dynamic>;
 
 	// warning can be null
-	public var locals:Map<String, DeclaredVar>;
+	public var locals:StringMap<DeclaredVar>;
 	var binops:StringMap<Expr->Expr->Dynamic>;
 
 	var depth:Int = 0;
@@ -163,7 +163,7 @@ class Interp {
 	];
 
 	public var optimizer:Optimizer;
-
+	
 	var usingHandler:UsingHandler;
 
 	#if hscriptPos
@@ -171,7 +171,7 @@ class Interp {
 	#end
 
 	public function new() {
-		locals = new Map();
+		locals = new StringMap();
 		declared = [];
 		resetVariables();
 		initOps();
@@ -179,10 +179,10 @@ class Interp {
 	}
 
 	private function resetVariables():Void {
-		customClasses = new Map<String, CustomClassHandler>();
-		variables = new Map<String, Dynamic>();
-		publicVariables = new Map<String, Dynamic>();
-		staticVariables = new Map<String, Dynamic>();
+		customClasses = new StringMap<CustomClassHandler>();
+		variables = new StringMap<Dynamic>();
+		publicVariables = new StringMap<Dynamic>();
+		staticVariables = new StringMap<Dynamic>();
 
 		usingHandler = new UsingHandler();
 		
@@ -544,7 +544,7 @@ class Interp {
 
 	public function execute(expr:Expr):Dynamic {
 		depth = 0;
-		locals = new Map();
+		locals = new StringMap();
 		declared = [];
 		optimizer.enabled = optimizeEnabled;
 		optimizer.optimizeLevel = optimizeLevel;
@@ -969,11 +969,11 @@ class Interp {
 				if (depth == 0) {
 					if(allowStaticVariables && isStatic == true) {
 						if(!staticVariables.exists(n)) // make it so it only sets it once
-							staticVariables.set(n, locals[n].r);
+							staticVariables.set(n, locals.get(n).r);
 					} else if(allowPublicVariables && isPublic == true) {
-						publicVariables.set(n, locals[n].r);
+						publicVariables.set(n, locals.get(n).r);
 					} else {
-						variables.set(n, locals[n].r);
+						variables.set(n, locals.get(n).r);
 					}
 				}
 				return null;

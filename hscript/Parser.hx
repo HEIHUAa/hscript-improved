@@ -20,6 +20,8 @@
  * DEALINGS IN THE SOFTWARE.
  */
 package hscript;
+
+import haxe.ds.StringMap;
 import hscript.Expr;
 
 using StringTools;
@@ -60,13 +62,13 @@ class Parser {
 	public var line : Int;
 	public var opChars : String;
 	public var identChars : String;
-	public var opPriority : Map<String,Int>;
-	public var opRightAssoc : Map<String,Bool>;
+	public var opPriority : StringMap<Int>;
+	public var opRightAssoc : StringMap<Bool>;
 
 	/**
 		allows to check for #if / #else in code
 	**/
-	public var preprocessorValues : Map<String,Dynamic> = new Map();
+	public var preprocessorValues : StringMap<Dynamic> = new StringMap();
 
 	/**
 		activate JSON compatiblity
@@ -141,8 +143,8 @@ class Parser {
 			["->", "??"],
 			["is"]
 		];
-		opPriority = new Map();
-		opRightAssoc = new Map();
+		opPriority = new StringMap();
+		opRightAssoc = new StringMap();
 		#if (haxe >= "4.0.0")
 		for(i => p in priorities) 
 			for(x in p) {
@@ -207,7 +209,6 @@ class Parser {
 			push(tk);
 			parseFullExpr(a);
 		}
-		applyOptimizerSettings();
 		return if( a.length == 1 ) a[0] else mk(EBlock(a),0);
 	}
 
@@ -2560,31 +2561,6 @@ class Parser {
 	public var preprocesorValues(get, set) : Map<String,Dynamic>;
 	inline function get_preprocesorValues() return preprocessorValues;
 	inline function set_preprocesorValues(v) return preprocessorValues = v;
-	
-	function applyOptimizerSettings() {
-		if( optimizer == null ) return;
-		
-		var level = preprocessorValues.get("OPTIMIZE_LEVEL");
-		if( level != null ) optimizer.optimizeLevel = level;
-		
-		var enabled = preprocessorValues.get("OPTIMIZE_ENABLED");
-		if( enabled != null ) optimizer.enabled = enabled;
-		
-		var constantFolding = preprocessorValues.get("OPTIMIZE_CONSTANT_FOLDING");
-		if( constantFolding != null ) optimizer.enableConstantFolding = constantFolding;
-		
-		var simplification = preprocessorValues.get("OPTIMIZE_SIMPLIFICATION");
-		if( simplification != null ) optimizer.enableExpressionSimplification = simplification;
-		
-		var deadCode = preprocessorValues.get("OPTIMIZE_DEAD_CODE");
-		if( deadCode != null ) optimizer.enableDeadCodeElimination = deadCode;
-		
-		var branch = preprocessorValues.get("OPTIMIZE_BRANCH");
-		if( branch != null ) optimizer.enableBranchOptimization = branch;
-		
-		var debug = preprocessorValues.get("OPTIMIZE_DEBUG");
-		if( debug != null ) optimizer.debug = debug;
-	}
 }
 
 @:structInit
