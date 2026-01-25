@@ -1,5 +1,7 @@
 package hscript;
 
+import haxe.ds.StringMap;
+import haxe.ds.IntMap;
 import hscript.Expr;
 import StringTools;
 
@@ -14,15 +16,30 @@ class Optimizer {
 	
 	public var debug:Bool = false;
 	public var debugPrinter:Printer;
+	
+	private var optimizationCache:StringMap<Expr>;
+	private var exprHashes:IntMap<String>;
+	private var stats:OptimizerStats;
+	private var finalConstants:Array<Expr>;
+	private var finalConstantIds:StringMap<Int>;
 
 	public function new() {
-		debugPrinter = new Printer();
+		optimizationCache = new StringMap();
+		exprHashes = new IntMap();
+		stats = new OptimizerStats();
+		finalConstants = [];
+		finalConstantIds = new StringMap();
 	}
 
 	public function optimize(expr:Expr):Expr {
 		if (!enabled) return expr;
 		
+		stats.reset();
+		finalConstants = [];
+		finalConstantIds = new StringMap();
+		
 		if (debug) {
+			debugPrinter = new Printer();
 			trace("=== HScript Optimizer Debug ===");
 			trace("Optimization Level: " + optimizeLevel);
 			trace("Constant Folding: " + enableConstantFolding);
@@ -34,39 +51,45 @@ class Optimizer {
 		}
 		
 		var result = expr;
-		var startTime = Sys.time();
-		var passTimes:Array<Float> = [];
 		
 		for (i in 0...optimizeLevel) {
-			var passStart = Sys.time();
-			var beforeStr = debugPrinter.exprToString(result);
+			var passStart = haxe.Timer.stamp();
+			
+			var beforeHash = getExprHash(result);
 			result = optimizeOnce(result);
-			var afterStr = debugPrinter.exprToString(result);
-			var passTime = (Sys.time() - passStart) * 1000;
-			passTimes.push(passTime);
+			var afterHash = getExprHash(result);
+			var passTime = (haxe.Timer.stamp() - passStart) * 1000;
+			stats.totalPassTime += passTime;
+			stats.passTimes.push(passTime);
 			
 			if (debug) {
-				var optimizedCount = beforeStr.length - afterStr.length;
-				trace("\n--- After Pass " + (i + 1) + " (" + Math.round(passTime * 100) / 100 + " ms, reduced " + optimizedCount + " chars) ---");
+				var optimizedCount = if (beforeHash != afterHash) "changed" else "unchanged";
+				var afterStr = debugPrinter.exprToString(result);
+				trace("\n--- Pass " + (i + 1) + " (" + passTime + " ms, " + optimizedCount + ") ---");
 				trace(afterStr);
 			}
 			
-			if (beforeStr == afterStr) {
+			stats.totalPasses++;
+			
+			if (beforeHash == afterHash) {
+				stats.skippedPasses++;
 				if (debug) {
-					trace("\n--- No further optimizations possible after pass " + (i + 1) + " ---");
+					trace("\n--- No changes in pass " + (i + 1) + ", stopping early ---");
 				}
 				break;
 			}
 		}
 		
-		var totalTime = (Sys.time() - startTime) * 1000;
+		stats.totalTime = stats.totalPassTime;
 		
 		if (debug) {
 			trace("\n--- Optimization Complete ---");
-			trace("Total passes: " + passTimes.length);
-			trace("Total time: " + Math.round(totalTime * 100) / 100 + " ms");
-			if (passTimes.length > 1) {
-				trace("Average per pass: " + Math.round((totalTime / passTimes.length) * 100) / 100 + " ms");
+			trace("Total passes: " + stats.totalPasses);
+			trace("Skipped passes: " + stats.skippedPasses);
+			trace("Total time: " + stats.totalTime + " ms");
+			trace("Cache size: " + Lambda.count(optimizationCache));
+			if (stats.totalPasses > 1) {
+				trace("Average per pass: " + (stats.totalTime / stats.totalPasses) + " ms");
 			}
 			trace("=== End Debug ===\n");
 		}
@@ -74,158 +97,527 @@ class Optimizer {
 		return result;
 	}
 
-	private function optimizeOnce(expr:Expr):Expr {
+	private function getExprHash(expr:Expr):String {
+		#if hscriptPos
+		var id = expr.pmin;
+		#else
+		var id = expr.hashCode();
+		#end
+		
+		if (exprHashes.exists(id)) {
+			return exprHashes.get(id);
+		}
+		
+		var hash = computeExprHash(expr);
+		exprHashes.set(id, hash);
+		return hash;
+	}
+
+	private function computeExprHash(expr:Expr):String {
 		return switch (Tools.expr(expr)) {
-			case EConst(_): return expr;
-			case EIdent(_): return expr;
-			case EPackage(_): return expr;
-			case EImport(_): return expr;
-			case EClass(name, fields, extend, interfaces, isFinal):
-				var optimizedFields = [for (f in fields) optimizeOnce(f)];
-				return Tools.mk(EClass(name, optimizedFields, extend, interfaces, isFinal), expr);
+			case EConst(c):
+				"C:" + switch(c) {
+					case CInt(v): "i" + v;
+					case CFloat(f): "f" + f;
+					case CString(s): "s" + s.length;
+				}
+			case EIdent(id): "I:" + id;
+			case EPackage(name): "P:" + name;
+			case EImport(c): "M:" + c;
+			case EClass(name, fields, extend, interfaces, isFinal): 
+				"CL:" + name + ":" + fields.length;
 			case EVar(n, t, e, isPublic, isStatic, isPrivate, isFinal, isInline, get, set, isVar):
-				var optimizedExpr = e != null ? optimizeOnce(e) : null;
-				return Tools.mk(EVar(n, t, optimizedExpr, isPublic, isStatic, isPrivate, isFinal, isInline, get, set, isVar), expr);
+				"V:" + n + ":" + (e != null ? getExprHash(e) : "null");
+			case EParent(e): "PR:" + getExprHash(e);
+			case EBlock(exprs): 
+				"B:[" + [for (e in exprs) getExprHash(e)].join(",") + "]";
+			case EField(e, f, s):
+				"FD:" + getExprHash(e) + ":" + f;
+			case EBinop(op, e1, e2):
+				"OP:" + op + ":" + getExprHash(e1) + ":" + getExprHash(e2);
+			case EUnop(op, prefix, e):
+				"UN:" + op + ":" + prefix + ":" + getExprHash(e);
+			case ECall(e, params):
+				"CLL:" + getExprHash(e) + ":[" + [for (p in params) getExprHash(p)].join(",") + "]";
+			case EIf(cond, e1, e2):
+				"IF:" + getExprHash(cond) + ":" + getExprHash(e1) + ":" + (e2 != null ? getExprHash(e2) : "null");
+			case EWhile(cond, e):
+				"WH:" + getExprHash(cond) + ":" + getExprHash(e);
+			case EDoWhile(cond, e):
+				"DW:" + getExprHash(cond) + ":" + getExprHash(e);
+			case EFor(v, it, e, ithv):
+				"FR:" + v + ":" + getExprHash(it) + ":" + getExprHash(e);
+			case EBreak: "BR";
+			case EContinue: "CT";
+			case EFunction(args, e, name, ret, isPublic, isStatic, isOverride, isPrivate, isFinal, isInline):
+				"FUN:" + name + ":" + getExprHash(e);
+			case EReturn(e):
+				"RET:" + (e != null ? getExprHash(e) : "null");
+			case EArray(e, index):
+				"ARR:" + getExprHash(e) + ":" + getExprHash(index);
+			case EArrayDecl(exprs):
+				"AD:[" + [for (e in exprs) getExprHash(e)].join(",") + "]";
+			case ENew(cl, params, paramType):
+				"NEW:" + cl + ":[" + [for (p in params) getExprHash(p)].join(",") + "]";
+			case EThrow(e):
+				"THR:" + getExprHash(e);
+			case ETry(e, v, t, ecatch):
+				"TRY:" + getExprHash(e) + ":" + getExprHash(ecatch);
+			case EObject(fl):
+				"OBJ:{" + [for (f in fl) f.name + ":" + getExprHash(f.e)].join(",") + "}";
+			case ETernary(cond, e1, e2):
+				"TRN:" + getExprHash(cond) + ":" + getExprHash(e1) + ":" + getExprHash(e2);
+			case ESwitch(e, cases, defaultExpr):
+				"SW:" + getExprHash(e) + ":[" + [for (c in cases) 
+					"[" + [for (v in c.values) getExprHash(v)].join(",") + ":" + getExprHash(c.expr)
+				].join(",") + "]:" + (defaultExpr != null ? getExprHash(defaultExpr) : "null");
+			case EMeta(name, args, e):
+				"MT:" + name + ":[" + (args != null ? [for (a in args) getExprHash(a)].join(",") : "") + "]:" + getExprHash(e);
+			case ECheckType(e, t):
+				"CT:" + getExprHash(e);
+			case EEnum(en, isAbstract): "EN:" + en.name;
+			case ECast(e, t): "CST:" + getExprHash(e);
+			case ERegex(e, f): "RX:" + e;
+		}
+	}
+
+	private function optimizeOnce(expr:Expr):Expr {
+		return optimizeWithCache(expr, 0);
+	}
+
+	private function optimizeWithCache(expr:Expr, depth:Int):Expr {
+		var useCache = !debug && depth < 3;
+		var cacheKey = getCacheKey(expr);
+		
+		if (useCache && optimizationCache.exists(cacheKey)) {
+			stats.cacheHits++;
+			return optimizationCache.get(cacheKey);
+		}
+		
+		stats.cacheMisses++;
+		
+		var result = switch (Tools.expr(expr)) {
+			case EConst(_): 
+				stats.constCount++;
+				expr;
+			case EIdent(_): 
+				stats.identCount++;
+				switch (Tools.expr(expr)) {
+					case EIdent(id):
+						var constId = finalConstantIds.get(id);
+						if (constId != null) {
+							stats.finalConstantReplacements++;
+							return finalConstants[constId];
+						}
+					default:
+				}
+				expr;
+			case EPackage(_): expr;
+			case EImport(_): expr;
+			case EClass(name, fields, extend, interfaces, isFinal):
+				stats.classCount++;
+				var optimizedFields = [for (f in fields) optimizeWithCache(f, depth + 1)];
+				Tools.mk(EClass(name, optimizedFields, extend, interfaces, isFinal), expr);
+			case EVar(n, t, e, isPublic, isStatic, isPrivate, isFinal, isInline, get, set, isVar):
+				stats.varCount++;
+				var optimizedExpr = e != null ? optimizeWithCache(e, depth + 1) : null;
+				if (isFinal && optimizedExpr != null && isConstantExpr(optimizedExpr)) {
+					var constId = finalConstants.length;
+					finalConstants.push(optimizedExpr);
+					finalConstantIds.set(n, constId);
+				}
+				Tools.mk(EVar(n, t, optimizedExpr, isPublic, isStatic, isPrivate, isFinal, isInline, get, set, isVar), expr);
 			case EParent(e):
-				var optimized = optimizeOnce(e);
-				return Tools.mk(EParent(optimized), expr);
+				stats.parentCount++;
+				var optimized = optimizeWithCache(e, depth + 1);
+				Tools.mk(EParent(optimized), expr);
 			case EBlock(exprs):
-				var optimizedExprs = [for (e in exprs) optimizeOnce(e)];
+				stats.blockCount++;
+				var optimizedExprs = [for (e in exprs) optimizeWithCache(e, depth + 1)];
 				var cleanedExprs = enableDeadCodeElimination ? removeDeadCode(optimizedExprs) : optimizedExprs;
+				cleanedExprs = [for (e in cleanedExprs) switch (Tools.expr(e)) {
+					case EVar(n, _, _, _, _, _, true, _, _, _, _):
+						if (finalConstantIds.exists(n)) {
+							stats.deadCodeEliminations++;
+							continue;
+						}
+						e;
+					default: e;
+				}];
 				if (cleanedExprs.length == 1) {
-					return cleanedExprs[0];
+					cleanedExprs[0];
 				} else {
-					return Tools.mk(EBlock(cleanedExprs), expr);
+					Tools.mk(EBlock(cleanedExprs), expr);
 				}
 			case EField(e, f, s):
-				var optimized = optimizeOnce(e);
-				return Tools.mk(EField(optimized, f, s), expr);
+				stats.fieldCount++;
+				var optimized = optimizeWithCache(e, depth + 1);
+				Tools.mk(EField(optimized, f, s), expr);
 			case EBinop(op, e1, e2):
-				var optimized1 = optimizeOnce(e1);
-				var optimized2 = optimizeOnce(e2);
+				stats.binopCount++;
+				var optimized1 = optimizeWithCache(e1, depth + 1);
+				var optimized2 = optimizeWithCache(e2, depth + 1);
 				var folded = enableConstantFolding ? tryFoldConstant(op, optimized1, optimized2) : null;
 				if (folded != null) {
-					return folded;
+					stats.folds++;
+					folded;
 				} else {
 					var simplified = enableExpressionSimplification ? trySimplifyBinop(op, optimized1, optimized2) : null;
 					if (simplified != null) {
-						return simplified;
+						stats.simplifications++;
+						simplified;
+					} else if (optimized1 != e1 || optimized2 != e2) {
+						Tools.mk(EBinop(op, optimized1, optimized2), expr);
 					} else {
-						return Tools.mk(EBinop(op, optimized1, optimized2), expr);
+						expr;
 					}
 				}
 			case EUnop(op, prefix, e):
-				var optimized = optimizeOnce(e);
+				stats.unopCount++;
+				var optimized = optimizeWithCache(e, depth + 1);
 				var folded = enableConstantFolding ? tryFoldUnop(op, prefix, optimized) : null;
 				if (folded != null) {
-					return folded;
+					stats.folds++;
+					folded;
 				} else {
 					var simplified = enableExpressionSimplification ? trySimplifyUnop(op, prefix, optimized) : null;
 					if (simplified != null) {
-						return simplified;
+						stats.simplifications++;
+						simplified;
+					} else if (optimized != e) {
+						Tools.mk(EUnop(op, prefix, optimized), expr);
 					} else {
-						return Tools.mk(EUnop(op, prefix, optimized), expr);
+						expr;
 					}
 				}
 			case ECall(e, params):
-				var optimizedExpr = optimizeOnce(e);
-				var optimizedParams = [for (p in params) optimizeOnce(p)];
-				return Tools.mk(ECall(optimizedExpr, optimizedParams), expr);
+				stats.callCount++;
+				var optimizedExpr = optimizeWithCache(e, depth + 1);
+				var optimizedParams = [for (p in params) optimizeWithCache(p, depth + 1)];
+				var paramsChanged = optimizedParams.length != params.length;
+				if (!paramsChanged) {
+					for (i in 0...params.length) {
+						if (optimizedParams[i] != params[i]) {
+							paramsChanged = true;
+							break;
+						}
+					}
+				}
+				
+				var callOptimized = tryOptimizeCall(optimizedExpr, optimizedParams);
+				if (callOptimized != null) {
+					stats.simplifications++;
+					return callOptimized;
+				}
+				
+				if (optimizedExpr != e || paramsChanged) {
+					Tools.mk(ECall(optimizedExpr, optimizedParams), expr);
+				} else {
+					expr;
+				}
 			case EIf(cond, e1, e2):
-				var optimizedCond = optimizeOnce(cond);
-				var optimizedE1 = optimizeOnce(e1);
-				var optimizedE2 = e2 != null ? optimizeOnce(e2) : null;
+				stats.ifCount++;
+				var optimizedCond = optimizeWithCache(cond, depth + 1);
+				var optimizedE1 = optimizeWithCache(e1, depth + 1);
+				var optimizedE2 = e2 != null ? optimizeWithCache(e2, depth + 1) : null;
+				
+				var condOptimized = tryOptimizeCondition(optimizedCond);
+				if (condOptimized != null) {
+					optimizedCond = condOptimized;
+				}
 				
 				if (enableBranchOptimization) {
 					var optimized = tryOptimizeIf(optimizedCond, optimizedE1, optimizedE2);
 					if (optimized != null) {
-						return optimized;
+						stats.branchOptimizations++;
+						optimized;
+					} else if (optimizedCond != cond || optimizedE1 != e1 || optimizedE2 != e2) {
+						Tools.mk(EIf(optimizedCond, optimizedE1, optimizedE2), expr);
+					} else {
+						expr;
+					}
+				} else if (optimizedCond != cond || optimizedE1 != e1 || optimizedE2 != e2) {
+					Tools.mk(EIf(optimizedCond, optimizedE1, optimizedE2), expr);
+				} else {
+					expr;
+				}
+			case EWhile(cond, e):
+				stats.whileCount++;
+				var optimizedCond = optimizeWithCache(cond, depth + 1);
+				var oldConstants = finalConstants.copy();
+				var oldConstantIds = finalConstantIds.copy();
+				var optimizedBody = optimizeWithCache(e, depth + 1);
+				finalConstants = oldConstants;
+				finalConstantIds = oldConstantIds;
+				if (optimizedCond != cond || optimizedBody != e) {
+					Tools.mk(EWhile(optimizedCond, optimizedBody), expr);
+				} else {
+					expr;
+				}
+			case EDoWhile(cond, e):
+				stats.doWhileCount++;
+				var oldConstants = finalConstants.copy();
+				var oldConstantIds = finalConstantIds.copy();
+				var optimizedCond = optimizeWithCache(cond, depth + 1);
+				var optimizedBody = optimizeWithCache(e, depth + 1);
+				finalConstants = oldConstants;
+				finalConstantIds = oldConstantIds;
+				if (optimizedCond != cond || optimizedBody != e) {
+					Tools.mk(EDoWhile(optimizedCond, optimizedBody), expr);
+				} else {
+					expr;
+				}
+			case EFor(v, it, e, ithv):
+				stats.forCount++;
+				var optimizedIt = optimizeWithCache(it, depth + 1);
+				var oldConstants = finalConstants.copy();
+				var oldConstantIds = finalConstantIds.copy();
+				var optimizedBody = optimizeWithCache(e, depth + 1);
+				finalConstants = oldConstants;
+				finalConstantIds = oldConstantIds;
+				if (optimizedIt != it || optimizedBody != e) {
+					Tools.mk(EFor(v, optimizedIt, optimizedBody, ithv), expr);
+				} else {
+					expr;
+				}
+			case EBreak: 
+				stats.breakCount++;
+				expr;
+			case EContinue: 
+				stats.continueCount++;
+				expr;
+			case EFunction(args, e, name, ret, isPublic, isStatic, isOverride, isPrivate, isFinal, isInline):
+				stats.functionCount++;
+				var oldConstants = finalConstants.copy();
+				var oldConstantIds = finalConstantIds.copy();
+				var optimizedBody = optimizeWithCache(e, depth + 1);
+				finalConstants = oldConstants;
+				finalConstantIds = oldConstantIds;
+				if (optimizedBody != e) {
+					Tools.mk(EFunction(args, optimizedBody, name, ret, isPublic, isStatic, isOverride, isPrivate, isFinal, isInline), expr);
+				} else {
+					expr;
+				}
+			case EReturn(e):
+				stats.returnCount++;
+				var optimized = e != null ? optimizeWithCache(e, depth + 1) : null;
+				if (optimized != e) {
+					Tools.mk(EReturn(optimized), expr);
+				} else {
+					expr;
+				}
+			case EArray(e, index):
+				stats.arrayCount++;
+				var optimizedExpr = optimizeWithCache(e, depth + 1);
+				var optimizedIndex = optimizeWithCache(index, depth + 1);
+				if (optimizedExpr != e || optimizedIndex != index) {
+					Tools.mk(EArray(optimizedExpr, optimizedIndex), expr);
+				} else {
+					expr;
+				}
+			case EArrayDecl(exprs, wantedType):
+				stats.arrayDeclCount++;
+				var optimizedExprs = [for (e in exprs) optimizeWithCache(e, depth + 1)];
+				var changed = optimizedExprs.length != exprs.length;
+				if (!changed) {
+					for (i in 0...exprs.length) {
+						if (optimizedExprs[i] != exprs[i]) {
+							changed = true;
+							break;
+						}
 					}
 				}
-				return Tools.mk(EIf(optimizedCond, optimizedE1, optimizedE2), expr);
-			case EWhile(cond, e):
-				var optimizedCond = optimizeOnce(cond);
-				var optimizedBody = optimizeOnce(e);
-				return Tools.mk(EWhile(optimizedCond, optimizedBody), expr);
-			case EDoWhile(cond, e):
-				var optimizedCond = optimizeOnce(cond);
-				var optimizedBody = optimizeOnce(e);
-				return Tools.mk(EDoWhile(optimizedCond, optimizedBody), expr);
-			case EFor(v, it, e, ithv):
-				var optimizedIt = optimizeOnce(it);
-				var optimizedBody = optimizeOnce(e);
-				return Tools.mk(EFor(v, optimizedIt, optimizedBody, ithv), expr);
-			case EBreak: return expr;
-			case EContinue: return expr;
-			case EFunction(args, e, name, ret, isPublic, isStatic, isOverride, isPrivate, isFinal, isInline):
-				var optimizedBody = optimizeOnce(e);
-				return Tools.mk(EFunction(args, optimizedBody, name, ret, isPublic, isStatic, isOverride, isPrivate, isFinal, isInline), expr);
-			case EReturn(e):
-				var optimized = e != null ? optimizeOnce(e) : null;
-				return Tools.mk(EReturn(optimized), expr);
-			case EArray(e, index):
-				var optimizedExpr = optimizeOnce(e);
-				var optimizedIndex = optimizeOnce(index);
-				return Tools.mk(EArray(optimizedExpr, optimizedIndex), expr);
-			case EArrayDecl(exprs, wantedType):
-				var optimizedExprs = [for (e in exprs) optimizeOnce(e)];
-				return Tools.mk(EArrayDecl(optimizedExprs, wantedType), expr);
-			case ENew(cl, params, paramType):
-				var optimizedParams = [for (p in params) optimizeOnce(p)];
-				return Tools.mk(ENew(cl, optimizedParams, paramType), expr);
-			case EThrow(e):
-				var optimized = optimizeOnce(e);
-				return Tools.mk(EThrow(optimized), expr);
-			case ETry(e, v, t, ecatch):
-				var optimizedTry = optimizeOnce(e);
-				var optimizedCatch = optimizeOnce(ecatch);
-				return Tools.mk(ETry(optimizedTry, v, t, optimizedCatch), expr);
-			case EObject(fl):
-				var optimizedFields = [for (f in fl) {name: f.name, e: optimizeOnce(f.e)}];
-				var objectFields:Array<ObjectField> = [];
-				for (f in optimizedFields) {
-					objectFields.push({name: f.name, e: f.e});
+				if (changed) {
+					Tools.mk(EArrayDecl(optimizedExprs, wantedType), expr);
+				} else {
+					expr;
 				}
-				return Tools.mk(EObject(objectFields), expr);
+			case ENew(cl, params, paramType):
+				stats.newCount++;
+				var optimizedParams = [for (p in params) optimizeWithCache(p, depth + 1)];
+				var changed = optimizedParams.length != params.length;
+				if (!changed) {
+					for (i in 0...params.length) {
+						if (optimizedParams[i] != params[i]) {
+							changed = true;
+							break;
+						}
+					}
+				}
+				if (changed) {
+					Tools.mk(ENew(cl, optimizedParams, paramType), expr);
+				} else {
+					expr;
+				}
+			case EThrow(e):
+				stats.throwCount++;
+				var optimized = optimizeWithCache(e, depth + 1);
+				if (optimized != e) {
+					Tools.mk(EThrow(optimized), expr);
+				} else {
+					expr;
+				}
+			case ETry(e, v, t, ecatch):
+				stats.tryCount++;
+				var optimizedTry = optimizeWithCache(e, depth + 1);
+				var optimizedCatch = optimizeWithCache(ecatch, depth + 1);
+				if (optimizedTry != e || optimizedCatch != ecatch) {
+					Tools.mk(ETry(optimizedTry, v, t, optimizedCatch), expr);
+				} else {
+					expr;
+				}
+			case EObject(fl):
+				stats.objectCount++;
+				var optimizedFields = [for (f in fl) {name: f.name, e: optimizeWithCache(f.e, depth + 1)}];
+				var changed = optimizedFields.length != fl.length;
+				if (!changed) {
+					for (i in 0...fl.length) {
+						if (optimizedFields[i].e != fl[i].e) {
+							changed = true;
+							break;
+						}
+					}
+				}
+				if (changed) {
+					var objectFields:Array<ObjectField> = [];
+					for (f in optimizedFields) {
+						objectFields.push({name: f.name, e: f.e});
+					}
+					Tools.mk(EObject(objectFields), expr);
+				} else {
+					expr;
+				}
 			case ETernary(cond, e1, e2):
-				var optimizedCond = optimizeOnce(cond);
-				var optimizedE1 = optimizeOnce(e1);
-				var optimizedE2 = optimizeOnce(e2);
+				stats.ternaryCount++;
+				var optimizedCond = optimizeWithCache(cond, depth + 1);
+				var optimizedE1 = optimizeWithCache(e1, depth + 1);
+				var optimizedE2 = optimizeWithCache(e2, depth + 1);
 				
 				if (enableBranchOptimization) {
 					var optimized = tryOptimizeTernary(optimizedCond, optimizedE1, optimizedE2);
 					if (optimized != null) {
-						return optimized;
+						stats.branchOptimizations++;
+						optimized;
+					} else if (optimizedCond != cond || optimizedE1 != e1 || optimizedE2 != e2) {
+						Tools.mk(ETernary(optimizedCond, optimizedE1, optimizedE2), expr);
+					} else {
+						expr;
 					}
+				} else if (optimizedCond != cond || optimizedE1 != e1 || optimizedE2 != e2) {
+					Tools.mk(ETernary(optimizedCond, optimizedE1, optimizedE2), expr);
+				} else {
+					expr;
 				}
-				return Tools.mk(ETernary(optimizedCond, optimizedE1, optimizedE2), expr);
 			case ESwitch(e, cases, defaultExpr):
-				var optimizedExpr = optimizeOnce(e);
+				stats.switchCount++;
+				var optimizedExpr = optimizeWithCache(e, depth + 1);
 				var optimizedCases = [for (c in cases) {
-					values: [for (v in c.values) optimizeOnce(v)],
-					expr: optimizeOnce(c.expr)
+					values: [for (v in c.values) optimizeWithCache(v, depth + 1)],
+					expr: optimizeWithCache(c.expr, depth + 1)
 				}];
 				var switchCases:Array<SwitchCase> = [];
 				for (c in optimizedCases) {
 					switchCases.push({values: c.values, expr: c.expr});
 				}
-				var optimizedDefault = defaultExpr != null ? optimizeOnce(defaultExpr) : null;
-				return Tools.mk(ESwitch(optimizedExpr, switchCases, optimizedDefault), expr);
+				var optimizedDefault = defaultExpr != null ? optimizeWithCache(defaultExpr, depth + 1) : null;
+				
+				var changed = optimizedExpr != e || optimizedDefault != defaultExpr;
+				if (!changed) {
+					for (i in 0...cases.length) {
+						var oldCase = cases[i];
+						var newCase = optimizedCases[i];
+						if (oldCase.values.length != newCase.values.length || oldCase.expr != newCase.expr) {
+							changed = true;
+							break;
+						}
+						for (j in 0...oldCase.values.length) {
+							if (oldCase.values[j] != newCase.values[j]) {
+								changed = true;
+								break;
+							}
+						}
+						if (changed) break;
+					}
+				}
+				
+				if (changed) {
+					Tools.mk(ESwitch(optimizedExpr, switchCases, optimizedDefault), expr);
+				} else {
+					expr;
+				}
 			case EMeta(name, args, e):
-				var optimizedArgs = args != null ? [for (a in args) optimizeOnce(a)] : null;
-				var optimizedExpr = optimizeOnce(e);
-				return Tools.mk(EMeta(name, optimizedArgs, optimizedExpr), expr);
+				stats.metaCount++;
+				var optimizedArgs = args != null ? [for (a in args) optimizeWithCache(a, depth + 1)] : null;
+				var optimizedExpr = optimizeWithCache(e, depth + 1);
+				var argsChanged = args != null && optimizedArgs.length == args.length;
+				if (argsChanged) {
+					for (i in 0...args.length) {
+						if (optimizedArgs[i] != args[i]) {
+							argsChanged = false;
+							break;
+						}
+					}
+				}
+				if (optimizedExpr != e || (args != null && !argsChanged)) {
+					Tools.mk(EMeta(name, optimizedArgs, optimizedExpr), expr);
+				} else {
+					expr;
+				}
 			case ECheckType(e, t):
-				var optimized = optimizeOnce(e);
-				return Tools.mk(ECheckType(optimized, t), expr);
-			case EEnum(en, isAbstract):
-				return Tools.mk(EEnum(en, isAbstract), expr);
+				stats.checkTypeCount++;
+				var optimized = optimizeWithCache(e, depth + 1);
+				if (optimized != e) {
+					Tools.mk(ECheckType(optimized, t), expr);
+				} else {
+					expr;
+				}
+			case EEnum(en, isAbstract): 
+				stats.enumCount++;
+				expr;
 			case ECast(e, t):
-				var optimized = optimizeOnce(e);
-				return Tools.mk(ECast(optimized, t), expr);
-			case ERegex(e, f):
-				return Tools.mk(ERegex(e, f), expr);
+				stats.castCount++;
+				var optimized = optimizeWithCache(e, depth + 1);
+				if (optimized != e) {
+					Tools.mk(ECast(optimized, t), expr);
+				} else {
+					expr;
+				}
+			case ERegex(e, f): 
+				stats.regexCount++;
+				expr;
 		}
+		
+		if (useCache) {
+			optimizationCache.set(cacheKey, result);
+		}
+		
+		return result;
+	}
+
+	private inline function getCacheKey(expr:Expr):String {
+		#if hscriptPos
+		return expr.pmin + ":" + expr.pmax;
+		#else
+		return Std.string(expr.hashCode());
+		#end
+	}
+
+	public function clearCache():Void {
+		optimizationCache = new StringMap();
+		exprHashes = new IntMap();
+		stats.cacheHits = 0;
+		stats.cacheMisses = 0;
+	}
+
+	public function dispose():Void {
+		optimizationCache = null;
+		exprHashes = null;
+		debugPrinter = null;
+		stats = null;
+	}
+
+	public function getStats():OptimizerStats {
+		return stats;
 	}
 
 	private function tryFoldConstant(op:String, e1:Expr, e2:Expr):Null<Expr> {
@@ -553,6 +945,22 @@ class Optimizer {
 					var mask = Std.int(c2) - 1;
 					return Tools.mk(EBinop("&", e1, makeConst(mask, e2)), e1);
 				}
+			case "!=":
+				if (c1 != null && c2 != null) return makeConst(c1 != c2, e1);
+				if (e1 == e2) return makeConst(false, e1);
+			case "==":
+				if (c1 != null && c2 != null) return makeConst(c1 == c2, e1);
+				if (e1 == e2) return makeConst(true, e1);
+			case ">":
+				if (c1 != null && c2 != null) return makeConst(c1 > c2, e1);
+			case "<":
+				if (c1 != null && c2 != null) return makeConst(c1 < c2, e1);
+			case ">=":
+				if (c1 != null && c2 != null) return makeConst(c1 >= c2, e1);
+			case "<=":
+				if (c1 != null && c2 != null) return makeConst(c1 <= c2, e1);
+			case "is":
+				if (c1 != null && c2 != null) return makeConst(Std.isOfType(c1, c2), e1);
 		}
 		
 		return null;
@@ -566,6 +974,13 @@ class Optimizer {
 				}
 			default:
 		}
+		
+		if (op == "-") {
+			var c = getConstValue(e);
+			if (c != null) return makeConst(-c, e);
+		}
+		
+		if (op == "+") return e;
 		
 		return null;
 	}
@@ -606,7 +1021,129 @@ class Optimizer {
 		return null;
 	}
 
-	private function removeDeadCode(exprs:Array<Expr>):Array<Expr> {
+	private function tryOptimizeCall(e:Expr, params:Array<Expr>):Null<Expr> {
+		switch (Tools.expr(e)) {
+			case EField({e: EIdent("Math")}, "abs"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null && c >= 0) return params[0];
+					if (c != null) return makeConst(-c, params[0]);
+				}
+			case EField({e: EIdent("Math")}, "floor"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Math.floor(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "ceil"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Math.ceil(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "round"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Math.round(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "sqrt"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null && c >= 0) return makeConst(Math.sqrt(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "pow"):
+				if (params.length == 2) {
+					var c1 = getConstValue(params[0]);
+					var c2 = getConstValue(params[1]);
+					if (c1 != null && c2 != null) return makeConst(Math.pow(c1, c2), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "sin"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Math.sin(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "cos"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Math.cos(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "tan"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Math.tan(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "asin"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Math.asin(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "acos"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Math.acos(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "atan"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Math.atan(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "log"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null && c > 0) return makeConst(Math.log(c), params[0]);
+				}
+			case EField({e: EIdent("Math")}, "PI"):
+				return makeConst(Math.PI, e);
+			case EField({e: EIdent("Math")}, "E"):
+				return makeConst(2.718281828459045, e);
+			case EField({e: EIdent("Std")}, "string"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Std.string(c), params[0]);
+				}
+			case EField({e: EIdent("Std")}, "int"):
+				if (params.length == 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(Std.int(c), params[0]);
+				}
+			case EField({e: EIdent("StringTools")}, "trim"):
+				if (params.length >= 1) {
+					var c = getConstValue(params[0]);
+					if (c != null) return makeConst(StringTools.trim(c), params[0]);
+				}
+			default:
+		}
+		return null;
+	}
+
+	private function tryOptimizeCondition(cond:Expr):Null<Expr> {
+		switch (Tools.expr(cond)) {
+			case EIdent(id):
+				var constId = finalConstantIds.get(id);
+				if (constId != null) {
+					return finalConstants[constId];
+				}
+			case EUnop("!", _, inner):
+				switch (Tools.expr(inner)) {
+					case EIdent(id):
+						var constId = finalConstantIds.get(id);
+						if (constId != null) {
+							return Tools.mk(EUnop("!", false, finalConstants[constId]), cond);
+						}
+					case EUnop("!", _, inner2):
+						return inner2;
+					case EBinop("&&", a, b):
+						return Tools.mk(EBinop("||", Tools.mk(EUnop("!", false, a), cond), 
+							Tools.mk(EUnop("!", false, b), cond)), cond);
+					case EBinop("||", a, b):
+						return Tools.mk(EBinop("&&", Tools.mk(EUnop("!", false, a), cond), 
+							Tools.mk(EUnop("!", false, b), cond)), cond);
+					default:
+				}
+			default:
+		}
+		return null;
+	}
+
+	private inline function removeDeadCode(exprs:Array<Expr>):Array<Expr> {
 		var result:Array<Expr> = [];
 		var foundTerminator = false;
 		
@@ -627,7 +1164,7 @@ class Optimizer {
 		return result;
 	}
 	
-	private function isUnconditionalTerminator(expr:Expr):Bool {
+	private inline function isUnconditionalTerminator(expr:Expr):Bool {
 		return switch (Tools.expr(expr)) {
 			case EReturn(_): true;
 			case EThrow(_): true;
@@ -642,7 +1179,7 @@ class Optimizer {
 		}
 	}
 
-	private function getConstValue(expr:Expr):Null<Dynamic> {
+	private inline function getConstValue(expr:Expr):Null<Dynamic> {
 		return switch (Tools.expr(expr)) {
 			case EConst(CInt(v)): v;
 			case EConst(CFloat(v)): v;
@@ -665,7 +1202,7 @@ class Optimizer {
 		}
 	}
 
-	private function exprEquals(e1:Expr, e2:Expr):Bool {
+	private inline function exprEquals(e1:Expr, e2:Expr):Bool {
 		if (e1 == e2) return true;
 		if (e1 == null || e2 == null) return false;
 		
@@ -745,7 +1282,7 @@ class Optimizer {
 		}
 	}
 
-	private function isPureConstant(expr:Expr):Bool {
+	private inline function isPureConstant(expr:Expr):Bool {
 		return switch (Tools.expr(expr)) {
 			case EConst(_): true;
 			case EParent(e): isPureConstant(e);
@@ -753,7 +1290,21 @@ class Optimizer {
 		}
 	}
 
-	private function isStringExpr(expr:Expr):Bool {
+	private inline function isConstantExpr(expr:Expr):Bool {
+		return switch (Tools.expr(expr)) {
+			case EConst(_): true;
+			case EParent(e): isConstantExpr(e);
+			case EBinop(op, e1, e2): 
+				var c1 = getConstValue(e1);
+				var c2 = getConstValue(e2);
+				c1 != null && c2 != null;
+			case EUnop(op, prefix, e):
+				getConstValue(e) != null;
+			default: false;
+		}
+	}
+
+	private inline function isStringExpr(expr:Expr):Bool {
 		return switch (Tools.expr(expr)) {
 			case EConst(CString(_)): true;
 			case EParent(e): isStringExpr(e);
@@ -762,10 +1313,11 @@ class Optimizer {
 		}
 	}
 	
-	private function isPowerOfTwo(n:Float):Bool {
+	private inline function isPowerOfTwo(n:Float):Bool {
 		if (n != Math.floor(n)) return false;
 		var i = Std.int(n);
 		if (i <= 0) return false;
 		return (i & (i - 1)) == 0;
 	}
+
 }

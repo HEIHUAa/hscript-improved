@@ -59,6 +59,7 @@ enum abstract ScriptObjectType(UInt8) {
 class DeclaredVar {
 	public var r:Dynamic;
 	public var depth:Int;
+	public var isFinal:Bool;
 }
 
 @:structInit
@@ -339,6 +340,9 @@ class Interp {
 					var prop:Property = cast l.r;
 					return prop.callSetter(id, v);
 				} else {
+					if (l.isFinal) {
+						error(ECustom("Cannot reassign final variable '" + id + "'"));
+					}
 					l.r = v;
 					if (l.depth == 0) {
 						setVar(id, v);
@@ -462,6 +466,9 @@ class Interp {
 			case EIdent(id):
 				var l = locals.get(id);
 				if(l != null) {
+					if (l.isFinal) {
+						error(ECustom("Cannot modify final variable '" + id + "'"));
+					}
 					var v:Dynamic = l.r;
 					var prop:Property = null;
 					if (v is Property) {
@@ -554,6 +561,7 @@ class Interp {
 		optimizer.enableBranchOptimization = enableBranchOptimization;
 		optimizer.debug = optimizerDebug;
 		var optimizedExpr = optimizer.optimize(expr);
+		optimizer.clearCache();
 		return exprReturn(optimizedExpr);
 	}
 
@@ -963,7 +971,8 @@ class Interp {
 				}
 				var declVar:DeclaredVar = {
 					r: (declProp == null) ? r : declProp,
-					depth: depth
+					depth: depth,
+					isFinal: isFinal
 				};
 				locals.set(n, declVar);
 				if (depth == 0) {
@@ -1093,7 +1102,7 @@ class Interp {
 					me.depth++;
 					me.locals = me.duplicate(capturedLocals);
 					for (i in 0...params.length)
-						me.locals.set(params[i].name, {r: args[i], depth: depth});
+						me.locals.set(params[i].name, {r: args[i], depth: depth, isFinal: false});
 					var r:Null<Dynamic> = null;
 					var oldDecl:Int = declared.length;
 					if (inTry)
@@ -1129,7 +1138,7 @@ class Interp {
 					} else {
 						// function-in-function is a local function
 						declared.push({n: name, old: locals.get(name), depth: depth});
-						var ref:DeclaredVar = {r: f, depth: depth};
+						var ref:DeclaredVar = {r: f, depth: depth, isFinal: false};
 						locals.set(name, ref);
 						capturedLocals.set(name, ref); // allow self-recursion
 					}
@@ -1251,7 +1260,7 @@ class Interp {
 					inTry = oldTry;
 					// declare 'v'
 					declared.push({n: n, old: locals.get(n), depth: depth});
-					locals.set(n, {r: err, depth: depth});
+					locals.set(n, {r: err, depth: depth, isFinal: false});
 					var v:Dynamic = expr(ecatch);
 					restore(old);
 					return v;
@@ -1293,10 +1302,10 @@ class Interp {
 													case EIdent(n):
 														declared.push({
 															n: n,
-															old: {r: locals.get(n), depth: depth},
+															old: {r: locals.get(n), depth: depth, isFinal: false},
 															depth: depth
 														});
-														locals.set(n, {r: valParams[i], depth: depth});
+														locals.set(n, {r: valParams[i], depth: depth, isFinal: false});
 													default:
 												}
 											}
@@ -1409,8 +1418,8 @@ class Interp {
 		while (_hasNext()) {
 			var next = _next();
 			if(isKeyValue)
-				locals.set(ithv, {r: next.key, depth: depth});
-			locals.set(n, {r: isKeyValue ? next.value : next, depth: depth});
+				locals.set(ithv, {r: next.key, depth: depth, isFinal: false});
+			locals.set(n, {r: isKeyValue ? next.value : next, depth: depth, isFinal: false});
 			if (!loopRun(() -> expr(e)))
 				break;
 		}
