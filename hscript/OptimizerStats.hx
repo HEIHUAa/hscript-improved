@@ -107,7 +107,7 @@ class OptimizerStats {
 		
 		return 'Optimizer Stats:
   Passes: $totalPasses (skipped: $skippedPasses)
-  Time: ${Math.round(totalTime * 100) / 100}ms
+  Time: ${totalTime}ms
   Cache: $cacheHits hits, $cacheMisses misses
   Expressions processed: $totalExprs
   Folds: $folds
