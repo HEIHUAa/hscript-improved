@@ -124,7 +124,7 @@ class Interp {
 	public var warnHandler:Error->Void;
 	public var importFailedCallback:Array<String>->Null<String>->Bool;
 
-	public var customClasses:StringMap <CustomClassHandler>;
+	public var customClasses:StringMap<CustomClassHandler>;
 	public var variables:StringMap<Dynamic>;
 	public var publicVariables:StringMap<Dynamic>;
 	public var staticVariables:StringMap<Dynamic>;
