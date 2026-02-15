@@ -7,7 +7,7 @@ import StringTools;
 
 class Optimizer {
 	public var enabled:Bool = true;
-	public var optimizeLevel:Int = 2;
+	public var optimizeLevel:Int = 4;
 	
 	public var enableConstantFolding:Bool = true;
 	public var enableExpressionSimplification:Bool = true;
