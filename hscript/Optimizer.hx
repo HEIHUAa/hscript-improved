@@ -83,14 +83,6 @@ class Optimizer {
 		stats.totalTime = stats.totalPassTime;
 		
 		if (debug) {
-			// trace("\n--- Optimization Complete ---");
-			// trace("Total passes: " + stats.totalPasses);
-			// trace("Skipped passes: " + stats.skippedPasses);
-			// trace("Total time: " + stats.totalTime + " ms");
-			// trace("Cache size: " + Lambda.count(optimizationCache));
-			// if (stats.totalPasses > 1) {
-			// 	trace("Average per pass: " + (stats.totalTime / stats.totalPasses) + " ms");
-			// }
 			trace(stats.getSummary());
 			trace("=== End Debug ===\n");
 		}
