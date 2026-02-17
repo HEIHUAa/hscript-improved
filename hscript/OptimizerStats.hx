@@ -47,6 +47,7 @@ class OptimizerStats {
 	public var branchOptimizations:Int = 0;
 	public var deadCodeEliminations:Int = 0;
 	public var finalConstantReplacements:Int = 0;
+	public var cseEliminations:Int = 0;
 
 	public function new() {}
 
@@ -96,6 +97,7 @@ class OptimizerStats {
 		branchOptimizations = 0;
 		deadCodeEliminations = 0;
 		finalConstantReplacements = 0;
+		cseEliminations = 0;
 	}
 
 	public function getSummary():String {
@@ -114,6 +116,7 @@ class OptimizerStats {
   Simplifications: $simplifications
   Branch optimizations: $branchOptimizations
   Dead code eliminations: $deadCodeEliminations
-  Final constant replacements: $finalConstantReplacements';
+  Final constant replacements: $finalConstantReplacements
+  CSE eliminations: $cseEliminations';
 	}
 }

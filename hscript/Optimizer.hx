@@ -13,6 +13,7 @@ class Optimizer {
 	public var enableExpressionSimplification:Bool = true;
 	public var enableDeadCodeElimination:Bool = true;
 	public var enableBranchOptimization:Bool = true;
+	public var enableCSE:Bool = true;
 	
 	public var debug:Bool = false;
 	public var debugPrinter:Printer;
@@ -22,6 +23,7 @@ class Optimizer {
 	private var stats:OptimizerStats;
 	private var finalConstants:Array<Expr>;
 	private var finalConstantIds:StringMap<Int>;
+	private var cseCounter:Int;
 
 	public function new() {
 		optimizationCache = new StringMap();
@@ -29,6 +31,7 @@ class Optimizer {
 		stats = new OptimizerStats();
 		finalConstants = [];
 		finalConstantIds = new StringMap();
+		cseCounter = 0;
 	}
 
 	public function optimize(expr:Expr):Expr {
@@ -37,6 +40,7 @@ class Optimizer {
 		stats.reset();
 		finalConstants = [];
 		finalConstantIds = new StringMap();
+		cseCounter = 0;
 		
 		if (debug) {
 			debugPrinter = new Printer();
@@ -46,6 +50,7 @@ class Optimizer {
 			trace("Expression Simplification: " + enableExpressionSimplification);
 			trace("Dead Code Elimination: " + enableDeadCodeElimination);
 			trace("Branch Optimization: " + enableBranchOptimization);
+			trace("CSE: " + enableCSE);
 			trace("\n--- Original Code ---");
 			trace(debugPrinter.exprToString(expr));
 		}
@@ -237,6 +242,9 @@ class Optimizer {
 						e;
 					default: e;
 				}];
+				if (enableCSE) {
+					cleanedExprs = performCSE(cleanedExprs);
+				}
 				if (cleanedExprs.length == 1) {
 					cleanedExprs[0];
 				} else {
@@ -250,12 +258,13 @@ class Optimizer {
 				stats.binopCount++;
 				var optimized1 = optimizeWithCache(e1, depth + 1);
 				var optimized2 = optimizeWithCache(e2, depth + 1);
-				var folded = enableConstantFolding ? tryFoldConstant(op, optimized1, optimized2) : null;
+				var hasSideEffect = hasSideEffects(optimized1) || hasSideEffects(optimized2);
+				var folded = !hasSideEffect && enableConstantFolding ? tryFoldConstant(op, optimized1, optimized2) : null;
 				if (folded != null) {
 					stats.folds++;
 					folded;
 				} else {
-					var simplified = enableExpressionSimplification ? trySimplifyBinop(op, optimized1, optimized2) : null;
+					var simplified = !hasSideEffect && enableExpressionSimplification ? trySimplifyBinop(op, optimized1, optimized2) : null;
 					if (simplified != null) {
 						stats.simplifications++;
 						simplified;
@@ -268,12 +277,13 @@ class Optimizer {
 			case EUnop(op, prefix, e):
 				stats.unopCount++;
 				var optimized = optimizeWithCache(e, depth + 1);
-				var folded = enableConstantFolding ? tryFoldUnop(op, prefix, optimized) : null;
+				var hasSideEffect = hasSideEffects(optimized);
+				var folded = !hasSideEffect && enableConstantFolding ? tryFoldUnop(op, prefix, optimized) : null;
 				if (folded != null) {
 					stats.folds++;
 					folded;
 				} else {
-					var simplified = enableExpressionSimplification ? trySimplifyUnop(op, prefix, optimized) : null;
+					var simplified = !hasSideEffect && enableExpressionSimplification ? trySimplifyUnop(op, prefix, optimized) : null;
 					if (simplified != null) {
 						stats.simplifications++;
 						simplified;
@@ -1011,95 +1021,6 @@ class Optimizer {
 	}
 
 	private function tryOptimizeCall(e:Expr, params:Array<Expr>):Null<Expr> {
-		switch (Tools.expr(e)) {
-			case EField({e: EIdent("Math")}, "abs"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null && c >= 0) return params[0];
-					if (c != null) return makeConst(-c, params[0]);
-				}
-			case EField({e: EIdent("Math")}, "floor"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Math.floor(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "ceil"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Math.ceil(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "round"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Math.round(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "sqrt"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null && c >= 0) return makeConst(Math.sqrt(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "pow"):
-				if (params.length == 2) {
-					var c1 = getConstValue(params[0]);
-					var c2 = getConstValue(params[1]);
-					if (c1 != null && c2 != null) return makeConst(Math.pow(c1, c2), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "sin"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Math.sin(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "cos"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Math.cos(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "tan"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Math.tan(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "asin"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Math.asin(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "acos"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Math.acos(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "atan"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Math.atan(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "log"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null && c > 0) return makeConst(Math.log(c), params[0]);
-				}
-			case EField({e: EIdent("Math")}, "PI"):
-				return makeConst(Math.PI, e);
-			case EField({e: EIdent("Math")}, "E"):
-				return makeConst(2.718281828459045, e);
-			case EField({e: EIdent("Std")}, "string"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Std.string(c), params[0]);
-				}
-			case EField({e: EIdent("Std")}, "int"):
-				if (params.length == 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(Std.int(c), params[0]);
-				}
-			case EField({e: EIdent("StringTools")}, "trim"):
-				if (params.length >= 1) {
-					var c = getConstValue(params[0]);
-					if (c != null) return makeConst(StringTools.trim(c), params[0]);
-				}
-			default:
-		}
 		return null;
 	}
 
@@ -1214,7 +1135,7 @@ class Optimizer {
 			case EBinop("=", _, _): true;
 			case EBinop(op, _, _) if (StringTools.endsWith(op, "=")): true;
 			case EUnop("++", _, _) | EUnop("--", _, _): true;
-			case EField(e, _, _): hasSideEffects(e);
+			case EField(e, _, _): true;
 			case EArray(e, index): hasSideEffects(e) || hasSideEffects(index);
 			case ENew(_, _, _): true;
 			case EThrow(_): true;
@@ -1307,6 +1228,267 @@ class Optimizer {
 		var i = Std.int(n);
 		if (i <= 0) return false;
 		return (i & (i - 1)) == 0;
+	}
+
+	private function isPureCSEExpr(expr:Expr):Bool {
+		return switch (Tools.expr(expr)) {
+			case EConst(_): true;
+			case EIdent(_): true;
+			case EParent(e): isPureCSEExpr(e);
+			case EBinop(op, e1, e2):
+				if (op == "=" || StringTools.endsWith(op, "=")) false;
+				else isPureCSEExpr(e1) && isPureCSEExpr(e2);
+			case EUnop(op, _, e):
+				if (op == "++" || op == "--") false;
+				else isPureCSEExpr(e);
+			default: false;
+		}
+	}
+
+	private function isCSECandidate(expr:Expr):Bool {
+		return switch (Tools.expr(expr)) {
+			case EBinop(op, _, _) if (op != "=" && !StringTools.endsWith(op, "=")): true;
+			case EUnop(_, _, _): true;
+			default: false;
+		}
+	}
+
+	private function getCSEHash(expr:Expr):String {
+		return switch (Tools.expr(expr)) {
+			case EConst(c):
+				"C:" + switch(c) {
+					case CInt(v): "i" + v;
+					case CFloat(f): "f" + f;
+					case CString(s): "s" + s;
+				}
+			case EIdent(id): "I:" + id;
+			case EParent(e): "PR:" + getCSEHash(e);
+			case EBinop(op, e1, e2): "OP:" + op + ":" + getCSEHash(e1) + ":" + getCSEHash(e2);
+			case EUnop(op, prefix, e): "UN:" + op + ":" + prefix + ":" + getCSEHash(e);
+			default: "";
+		}
+	}
+
+	private function collectCSEInExpr(expr:Expr, map:StringMap<{expr:Expr, count:Int, varName:String, firstUseIndex:Int, vars:StringMap<Bool>}>, exprIndex:Int):Void {
+		switch (Tools.expr(expr)) {
+			case EBinop(_, e1, e2):
+				collectCSEInExpr(e1, map, exprIndex);
+				collectCSEInExpr(e2, map, exprIndex);
+				if (isPureCSEExpr(expr) && isCSECandidate(expr)) {
+					var key = getCSEHash(expr);
+					if (map.exists(key)) {
+						map.get(key).count++;
+					} else {
+						map.set(key, {expr: expr, count: 1, varName: "", firstUseIndex: exprIndex, vars: null});
+					}
+				}
+			case EUnop(_, _, e):
+				collectCSEInExpr(e, map, exprIndex);
+				if (isPureCSEExpr(expr) && isCSECandidate(expr)) {
+					var key = getCSEHash(expr);
+					if (map.exists(key)) {
+						map.get(key).count++;
+					} else {
+						map.set(key, {expr: expr, count: 1, varName: "", firstUseIndex: exprIndex, vars: null});
+					}
+				}
+			case EField(e, _, _):
+				collectCSEInExpr(e, map, exprIndex);
+			case EParent(e):
+				collectCSEInExpr(e, map, exprIndex);
+			case EArray(e, idx):
+				collectCSEInExpr(e, map, exprIndex);
+				collectCSEInExpr(idx, map, exprIndex);
+			case ECall(e, params):
+				collectCSEInExpr(e, map, exprIndex);
+				for (p in params) collectCSEInExpr(p, map, exprIndex);
+			case EIf(cond, e1, e2):
+				collectCSEInExpr(cond, map, exprIndex);
+			case EWhile(cond, e):
+				collectCSEInExpr(cond, map, exprIndex);
+			case EVar(_, _, e, _, _, _, _, _, _, _, _):
+				if (e != null) collectCSEInExpr(e, map, exprIndex);
+			case EReturn(e):
+				if (e != null) collectCSEInExpr(e, map, exprIndex);
+			case ETernary(cond, e1, e2):
+				collectCSEInExpr(cond, map, exprIndex);
+			default:
+		}
+	}
+
+	private function applyCSEToExpr(expr:Expr, cseMap:StringMap<{expr:Expr, count:Int, varName:String, firstUseIndex:Int, vars:StringMap<Bool>}>):Expr {
+		if (isPureCSEExpr(expr) && isCSECandidate(expr)) {
+			var key = getCSEHash(expr);
+			if (cseMap.exists(key)) {
+				var entry = cseMap.get(key);
+				if (entry.count > 1 && entry.varName != "") {
+					stats.cseEliminations++;
+					return Tools.mk(EIdent(entry.varName), expr);
+				}
+			}
+		}
+		
+		return switch (Tools.expr(expr)) {
+			case EBinop(op, e1, e2):
+				var te1 = applyCSEToExpr(e1, cseMap);
+				var te2 = applyCSEToExpr(e2, cseMap);
+				if (te1 != e1 || te2 != e2) Tools.mk(EBinop(op, te1, te2), expr) else expr;
+			case EUnop(op, prefix, e):
+				var te = applyCSEToExpr(e, cseMap);
+				if (te != e) Tools.mk(EUnop(op, prefix, te), expr) else expr;
+			case EField(e, f, s):
+				var te = applyCSEToExpr(e, cseMap);
+				if (te != e) Tools.mk(EField(te, f, s), expr) else expr;
+			case EParent(e):
+				var te = applyCSEToExpr(e, cseMap);
+				if (te != e) Tools.mk(EParent(te), expr) else expr;
+			case EArray(e, idx):
+				var te = applyCSEToExpr(e, cseMap);
+				var tidx = applyCSEToExpr(idx, cseMap);
+				if (te != e || tidx != idx) Tools.mk(EArray(te, tidx), expr) else expr;
+			case ECall(e, params):
+				var te = applyCSEToExpr(e, cseMap);
+				var tparams = [for (p in params) applyCSEToExpr(p, cseMap)];
+				var changed = te != e;
+				if (!changed) for (i in 0...params.length) if (tparams[i] != params[i]) { changed = true; break; }
+				if (changed) Tools.mk(ECall(te, tparams), expr) else expr;
+			case EIf(cond, e1, e2):
+				var tcond = applyCSEToExpr(cond, cseMap);
+				if (tcond != cond) Tools.mk(EIf(tcond, e1, e2), expr) else expr;
+			case EWhile(cond, e):
+				var tcond = applyCSEToExpr(cond, cseMap);
+				if (tcond != cond) Tools.mk(EWhile(tcond, e), expr) else expr;
+			case EVar(n, t, e, isPublic, isStatic, isPrivate, isFinal, isInline, get, set, isVar):
+				var te = e != null ? applyCSEToExpr(e, cseMap) : null;
+				if (te != e) Tools.mk(EVar(n, t, te, isPublic, isStatic, isPrivate, isFinal, isInline, get, set, isVar), expr) else expr;
+			case EReturn(e):
+				var te = e != null ? applyCSEToExpr(e, cseMap) : null;
+				if (te != e) Tools.mk(EReturn(te), expr) else expr;
+			case ETernary(cond, e1, e2):
+				var tcond = applyCSEToExpr(cond, cseMap);
+				if (tcond != cond) Tools.mk(ETernary(tcond, e1, e2), expr) else expr;
+			default: expr;
+		}
+	}
+
+	private function getExprVars(expr:Expr, vars:StringMap<Bool>):Void {
+		switch (Tools.expr(expr)) {
+			case EIdent(id):
+				vars.set(id, true);
+			case EBinop(_, e1, e2):
+				getExprVars(e1, vars);
+				getExprVars(e2, vars);
+			case EUnop(_, _, e):
+				getExprVars(e, vars);
+			case EParent(e):
+				getExprVars(e, vars);
+			case EField(e, _, _):
+				getExprVars(e, vars);
+			case EArray(e, idx):
+				getExprVars(e, vars);
+				getExprVars(idx, vars);
+			case ECall(e, params):
+				getExprVars(e, vars);
+				for (p in params) getExprVars(p, vars);
+			case EIf(cond, e1, e2):
+				getExprVars(cond, vars);
+				getExprVars(e1, vars);
+				if (e2 != null) getExprVars(e2, vars);
+			case ETernary(cond, e1, e2):
+				getExprVars(cond, vars);
+				getExprVars(e1, vars);
+				getExprVars(e2, vars);
+			default:
+		}
+	}
+
+	private function getAssignedVar(expr:Expr):String {
+		return switch (Tools.expr(expr)) {
+			case EBinop("=", e1, _):
+				switch (Tools.expr(e1)) {
+					case EIdent(id): id;
+					default: null;
+				}
+			case EBinop(op, e1, _) if (StringTools.endsWith(op, "=")):
+				switch (Tools.expr(e1)) {
+					case EIdent(id): id;
+					default: null;
+				}
+			case EUnop("++", _, e) | EUnop("--", _, e):
+				switch (Tools.expr(e)) {
+					case EIdent(id): id;
+					default: null;
+				}
+			default: null;
+		}
+	}
+
+	private function performCSE(exprs:Array<Expr>):Array<Expr> {
+		var cseMap = new StringMap<{expr:Expr, count:Int, varName:String, firstUseIndex:Int, vars:StringMap<Bool>}>();
+		
+		for (i in 0...exprs.length) {
+			collectCSEInExpr(exprs[i], cseMap, i);
+		}
+		
+		for (key in cseMap.keys()) {
+			var entry = cseMap.get(key);
+			entry.vars = new StringMap<Bool>();
+			getExprVars(entry.expr, entry.vars);
+		}
+		
+		for (key in cseMap.keys()) {
+			var entry = cseMap.get(key);
+			if (entry.count > 1) {
+				var invalidated = false;
+				for (i in (entry.firstUseIndex + 1)...exprs.length) {
+					var assignedVar = getAssignedVar(exprs[i]);
+					if (assignedVar != null && entry.vars.exists(assignedVar)) {
+						invalidated = true;
+						break;
+					}
+				}
+				if (invalidated) {
+					entry.count = 1;
+				}
+			}
+		}
+		
+		var hasCSE = false;
+		for (key in cseMap.keys()) {
+			var entry = cseMap.get(key);
+			if (entry.count > 1) {
+				entry.varName = "__cse_" + (cseCounter++);
+				hasCSE = true;
+			}
+		}
+		
+		if (!hasCSE) return exprs;
+		
+		var cseDeclarations = new StringMap<Expr>();
+		for (key in cseMap.keys()) {
+			var entry = cseMap.get(key);
+			if (entry.count > 1) {
+				cseDeclarations.set(key, Tools.mk(EVar(entry.varName, null, entry.expr, false, false, false, true, false, null, null, true), entry.expr));
+			}
+		}
+		
+		var result:Array<Expr> = [];
+		var insertedKeys = new StringMap<Bool>();
+		
+		for (i in 0...exprs.length) {
+			for (key in cseMap.keys()) {
+				var entry = cseMap.get(key);
+				if (entry.count > 1 && entry.firstUseIndex == i && !insertedKeys.exists(key)) {
+					result.push(cseDeclarations.get(key));
+					insertedKeys.set(key, true);
+				}
+			}
+			
+			var transformed = applyCSEToExpr(exprs[i], cseMap);
+			result.push(transformed);
+		}
+		
+		return result;
 	}
 
 }
