@@ -13,7 +13,8 @@ class Optimizer {
 	public var enableExpressionSimplification:Bool = true;
 	public var enableDeadCodeElimination:Bool = true;
 	public var enableBranchOptimization:Bool = true;
-	public var enableCSE:Bool = true;
+	public var enableCSE:Bool = false;
+	public var enableCache:Bool = false;
 	
 	public var debug:Bool = false;
 	public var debugPrinter:Printer;
@@ -59,6 +60,11 @@ class Optimizer {
 		
 		for (i in 0...optimizeLevel) {
 			var passStart = haxe.Timer.stamp();
+			
+			optimizationCache = new StringMap();
+			exprHashes = new IntMap();
+			finalConstants = [];
+			finalConstantIds = new StringMap();
 			
 			var beforeHash = getExprHash(result);
 			result = optimizeOnce(result);
@@ -184,7 +190,7 @@ class Optimizer {
 	}
 
 	private function optimizeWithCache(expr:Expr, depth:Int):Expr {
-		var useCache = !debug && depth < 3;
+		var useCache = enableCache && !debug && depth < 3;
 		var cacheKey = getCacheKey(expr);
 		
 		if (useCache && optimizationCache.exists(cacheKey)) {
@@ -231,7 +237,11 @@ class Optimizer {
 				Tools.mk(EParent(optimized), expr);
 			case EBlock(exprs):
 				stats.blockCount++;
+				var oldConstants = finalConstants.copy();
+				var oldConstantIds = finalConstantIds.copy();
 				var optimizedExprs = [for (e in exprs) optimizeWithCache(e, depth + 1)];
+				finalConstants = oldConstants;
+				finalConstantIds = oldConstantIds;
 				var cleanedExprs = enableDeadCodeElimination ? removeDeadCode(optimizedExprs) : optimizedExprs;
 				cleanedExprs = [for (e in cleanedExprs) switch (Tools.expr(e)) {
 					case EVar(n, _, _, _, _, _, true, _, _, _, _):
@@ -321,8 +331,16 @@ class Optimizer {
 			case EIf(cond, e1, e2):
 				stats.ifCount++;
 				var optimizedCond = optimizeWithCache(cond, depth + 1);
+				var oldConstants = finalConstants.copy();
+				var oldConstantIds = finalConstantIds.copy();
 				var optimizedE1 = optimizeWithCache(e1, depth + 1);
+				finalConstants = oldConstants;
+				finalConstantIds = oldConstantIds;
+				var oldConstants2 = finalConstants.copy();
+				var oldConstantIds2 = finalConstantIds.copy();
 				var optimizedE2 = e2 != null ? optimizeWithCache(e2, depth + 1) : null;
+				finalConstants = oldConstants2;
+				finalConstantIds = oldConstantIds2;
 				
 				var condOptimized = tryOptimizeCondition(optimizedCond);
 				if (condOptimized != null) {
@@ -462,8 +480,16 @@ class Optimizer {
 				}
 			case ETry(e, v, t, ecatch):
 				stats.tryCount++;
+				var oldConstants = finalConstants.copy();
+				var oldConstantIds = finalConstantIds.copy();
 				var optimizedTry = optimizeWithCache(e, depth + 1);
+				finalConstants = oldConstants;
+				finalConstantIds = oldConstantIds;
+				var oldConstants2 = finalConstants.copy();
+				var oldConstantIds2 = finalConstantIds.copy();
 				var optimizedCatch = optimizeWithCache(ecatch, depth + 1);
+				finalConstants = oldConstants2;
+				finalConstantIds = oldConstantIds2;
 				if (optimizedTry != e || optimizedCatch != ecatch) {
 					Tools.mk(ETry(optimizedTry, v, t, optimizedCatch), expr);
 				} else {
@@ -493,8 +519,16 @@ class Optimizer {
 			case ETernary(cond, e1, e2):
 				stats.ternaryCount++;
 				var optimizedCond = optimizeWithCache(cond, depth + 1);
+				var oldConstants = finalConstants.copy();
+				var oldConstantIds = finalConstantIds.copy();
 				var optimizedE1 = optimizeWithCache(e1, depth + 1);
+				finalConstants = oldConstants;
+				finalConstantIds = oldConstantIds;
+				var oldConstants2 = finalConstants.copy();
+				var oldConstantIds2 = finalConstantIds.copy();
 				var optimizedE2 = optimizeWithCache(e2, depth + 1);
+				finalConstants = oldConstants2;
+				finalConstantIds = oldConstantIds2;
 				
 				if (enableBranchOptimization) {
 					var optimized = tryOptimizeTernary(optimizedCond, optimizedE1, optimizedE2);
@@ -514,15 +548,30 @@ class Optimizer {
 			case ESwitch(e, cases, defaultExpr):
 				stats.switchCount++;
 				var optimizedExpr = optimizeWithCache(e, depth + 1);
+				var oldConstants = finalConstants.copy();
+				var oldConstantIds = finalConstantIds.copy();
 				var optimizedCases = [for (c in cases) {
-					values: [for (v in c.values) optimizeWithCache(v, depth + 1)],
-					expr: optimizeWithCache(c.expr, depth + 1)
+					var caseConstants = finalConstants.copy();
+					var caseConstantIds = finalConstantIds.copy();
+					var result = {
+						values: [for (v in c.values) optimizeWithCache(v, depth + 1)],
+						expr: optimizeWithCache(c.expr, depth + 1)
+					};
+					finalConstants = caseConstants;
+					finalConstantIds = caseConstantIds;
+					result;
 				}];
+				finalConstants = oldConstants;
+				finalConstantIds = oldConstantIds;
 				var switchCases:Array<SwitchCase> = [];
 				for (c in optimizedCases) {
 					switchCases.push({values: c.values, expr: c.expr});
 				}
+				var oldConstants2 = finalConstants.copy();
+				var oldConstantIds2 = finalConstantIds.copy();
 				var optimizedDefault = defaultExpr != null ? optimizeWithCache(defaultExpr, depth + 1) : null;
+				finalConstants = oldConstants2;
+				finalConstantIds = oldConstantIds2;
 				
 				var changed = optimizedExpr != e || optimizedDefault != defaultExpr;
 				if (!changed) {
@@ -936,7 +985,7 @@ class Optimizer {
 				if (c1 != null && c1 == false) return e2;
 				if (c2 != null && c2 == false) return e1;
 			case "%":
-				if (c2 != null && c2 == 1) return makeConst(0, e1);
+				if (c2 != null && c2 == 1 && c1 != null && c1 == Math.floor(c1)) return makeConst(0, e1);
 				if (c1 != null && c2 != null) {
 					return makeConst(c1 % c2, e1);
 				}
@@ -1055,29 +1104,42 @@ class Optimizer {
 
 	private inline function removeDeadCode(exprs:Array<Expr>):Array<Expr> {
 		var result:Array<Expr> = [];
-		var foundTerminator = false;
 		
 		for (e in exprs) {
-			if (foundTerminator) {
-				if (hasSideEffects(e)) {
-					result.push(e);
-				}
-			} else {
-				result.push(e);
-				
-				if (isUnconditionalTerminator(e)) {
-					foundTerminator = true;
-				}
+			result.push(e);
+			
+			if (isUnconditionalTerminator(e)) {
+				break;
 			}
 		}
 		
 		return result;
 	}
 	
-	private inline function isUnconditionalTerminator(expr:Expr):Bool {
+	private function isUnconditionalTerminator(expr:Expr):Bool {
 		return switch (Tools.expr(expr)) {
 			case EReturn(_): true;
 			case EThrow(_): true;
+			case EIf(_, e1, e2):
+				if (e2 == null) false;
+				else isUnconditionalTerminator(e1) && isUnconditionalTerminator(e2);
+			case ETernary(_, e1, e2):
+				isUnconditionalTerminator(e1) && isUnconditionalTerminator(e2);
+			case ESwitch(_, cases, defaultExpr):
+				if (defaultExpr == null) false;
+				else {
+					var allCasesTerminate = true;
+					for (c in cases) {
+						if (!isUnconditionalTerminator(c.expr)) {
+							allCasesTerminate = false;
+							break;
+						}
+					}
+					allCasesTerminate && isUnconditionalTerminator(defaultExpr);
+				}
+			case EBlock(exprs):
+				if (exprs.length == 0) false;
+				else isUnconditionalTerminator(exprs[exprs.length - 1]);
 			default: false;
 		}
 	}
