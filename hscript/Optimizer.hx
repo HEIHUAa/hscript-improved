@@ -13,7 +13,7 @@ class Optimizer {
 	public var enableExpressionSimplification:Bool = true;
 	public var enableDeadCodeElimination:Bool = true;
 	public var enableBranchOptimization:Bool = true;
-	public var enableCSE:Bool = false;
+	public var enableCSE:Bool = false; // Need to fix a rare case where side effects occur.
 	public var enableCache:Bool = false;
 	
 	public var debug:Bool = false;
