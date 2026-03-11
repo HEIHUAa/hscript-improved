@@ -74,11 +74,11 @@ class Optimizer {
 			finalConstantIds = new StringMap();
 			
 			var beforeHash = getExprHash(result);
-			result = optimizeOnce(result);
-			var afterHash = getExprHash(result);
 			
 			if (debug) {
 				var passStart = haxe.Timer.stamp();
+				result = optimizeOnce(result);
+				var afterHash = getExprHash(result);
 				var passTime = (haxe.Timer.stamp() - passStart) * 1000;
 				stats.totalPassTime += passTime;
 				stats.passTimes.push(passTime);
@@ -87,14 +87,16 @@ class Optimizer {
 				trace("\n--- Pass " + (i + 1) + " (" + passTime + " ms, " + optimizedCount + ") ---");
 				trace(afterStr);
 				stats.totalPasses++;
-			}
-			
-			if (beforeHash == afterHash) {
-				if (debug) {
+				if (beforeHash == afterHash) {
 					stats.skippedPasses++;
 					trace("\n--- No changes in pass " + (i + 1) + ", stopping early ---");
+					break;
 				}
-				break;
+			} else {
+				result = optimizeOnce(result);
+				if (beforeHash == getExprHash(result)) {
+					break;
+				}
 			}
 		}
 		

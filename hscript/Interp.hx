@@ -970,7 +970,7 @@ class Interp {
 					}
 				}
 				var declVar:DeclaredVar = {
-					r: (declProp == null) ? r : declProp,
+					r: (!hasGetSet) ? r : declProp,
 					depth: depth,
 					isFinal: isFinal
 				};
