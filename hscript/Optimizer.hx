@@ -20,12 +20,13 @@ class Optimizer {
 	public var debugPrinter:Printer;
 	
 	private var optimizationCache:StringMap<Expr>;
-	private var exprHashes:IntMap<String>;
+	private var exprHashes:IntMap<Int>;
 	private var stats:OptimizerStats;
 	private var finalConstants:Array<Expr>;
 	private var finalConstantIds:StringMap<Int>;
 	private var cseCounter:Int;
 	private var exprIdCounter:Int;
+	private var hashCounter:Int;
 
 	public function new() {
 		optimizationCache = new StringMap();
@@ -35,16 +36,21 @@ class Optimizer {
 		finalConstantIds = new StringMap();
 		cseCounter = 0;
 		exprIdCounter = 0;
+		hashCounter = 1;
 	}
 
 	public function optimize(expr:Expr):Expr {
 		if (!enabled) return expr;
 		
-		if (debug) stats.reset();
+		if (debug) {
+			if (stats == null) stats = new OptimizerStats();
+			stats.reset();
+		}
 		finalConstants = [];
 		finalConstantIds = new StringMap();
 		cseCounter = 0;
 		exprIdCounter = 0;
+		hashCounter = 1;
 		
 		if (debug) {
 			debugPrinter = new Printer();
@@ -101,7 +107,7 @@ class Optimizer {
 		return result;
 	}
 
-	private function getExprHash(expr:Expr):String {
+	private function getExprHash(expr:Expr):Int {
 		#if hscriptPos
 		var id = expr.pmin;
 		#else
@@ -117,71 +123,111 @@ class Optimizer {
 		return hash;
 	}
 
-	private function computeExprHash(expr:Expr):String {
+	private inline function hashCombine(a:Int, b:Int):Int {
+		#if cpp
+		return untyped __cpp__("({0} * 31 + {1}) & 0x7FFFFFFF", a, b);
+		#else
+		return ((a * 31) + b) & 0x7FFFFFFF;
+		#end
+	}
+
+	private inline function hashString(s:String):Int {
+		var h:Int = 0;
+		for (i in 0...s.length) {
+			var c:Int = s.charCodeAt(i);
+			#if cpp
+			h = untyped __cpp__("(({0} << 5) - {0} + {1}) & 0x7FFFFFFF", h, c);
+			#else
+			h = ((h << 5) - h + c) & 0x7FFFFFFF;
+			#end
+		}
+		return h;
+	}
+
+	private function computeExprHash(expr:Expr):Int {
+		var h:Int;
 		return switch (Tools.expr(expr)) {
 			case EConst(c):
-				"C:" + switch(c) {
-					case CInt(v): "i" + v;
-					case CFloat(f): "f" + f;
-					case CString(s): "s" + s.length;
+				switch(c) {
+					case CInt(v): hashCombine(1, v);
+					case CFloat(f): hashCombine(2, Std.int(f * 1000));
+					case CString(s, _): hashCombine(3, hashString(s));
 				}
-			case EIdent(id): "I:" + id;
-			case EPackage(name): "P:" + name;
-			case EImport(c): "M:" + c;
+			case EIdent(id): hashCombine(4, hashString(id));
+			case EPackage(name): hashCombine(5, hashString(name));
+			case EImport(c): hashCombine(6, hashString(c));
 			case EClass(name, fields, extend, interfaces, isFinal): 
-				"CL:" + name + ":" + fields.length;
+				h = hashCombine(7, hashString(name));
+				hashCombine(h, fields.length);
 			case EVar(n, t, e, isPublic, isStatic, isPrivate, isFinal, isInline, get, set, isVar):
-				"V:" + n + ":" + (e != null ? getExprHash(e) : "null");
-			case EParent(e): "PR:" + getExprHash(e);
+				h = hashCombine(8, hashString(n));
+				e != null ? hashCombine(h, getExprHash(e)) : h;
+			case EParent(e): hashCombine(9, getExprHash(e));
 			case EBlock(exprs): 
-				"B:[" + [for (e in exprs) getExprHash(e)].join(",") + "]";
+				h = 10;
+				for (e in exprs) h = hashCombine(h, getExprHash(e));
+				h;
 			case EField(e, f, s):
-				"FD:" + getExprHash(e) + ":" + f;
+				hashCombine(hashCombine(11, getExprHash(e)), hashString(f));
 			case EBinop(op, e1, e2):
-				"OP:" + op + ":" + getExprHash(e1) + ":" + getExprHash(e2);
+				hashCombine(hashCombine(hashCombine(12, hashString(op)), getExprHash(e1)), getExprHash(e2));
 			case EUnop(op, prefix, e):
-				"UN:" + op + ":" + prefix + ":" + getExprHash(e);
+				hashCombine(hashCombine(hashCombine(13, hashString(op)), prefix ? 1 : 0), getExprHash(e));
 			case ECall(e, params):
-				"CLL:" + getExprHash(e) + ":[" + [for (p in params) getExprHash(p)].join(",") + "]";
+				h = hashCombine(14, getExprHash(e));
+				for (p in params) h = hashCombine(h, getExprHash(p));
+				h;
 			case EIf(cond, e1, e2):
-				"IF:" + getExprHash(cond) + ":" + getExprHash(e1) + ":" + (e2 != null ? getExprHash(e2) : "null");
+				h = hashCombine(15, getExprHash(cond));
+				h = hashCombine(h, getExprHash(e1));
+				e2 != null ? hashCombine(h, getExprHash(e2)) : h;
 			case EWhile(cond, e):
-				"WH:" + getExprHash(cond) + ":" + getExprHash(e);
+				hashCombine(hashCombine(16, getExprHash(cond)), getExprHash(e));
 			case EDoWhile(cond, e):
-				"DW:" + getExprHash(cond) + ":" + getExprHash(e);
+				hashCombine(hashCombine(17, getExprHash(cond)), getExprHash(e));
 			case EFor(v, it, e, ithv):
-				"FR:" + v + ":" + getExprHash(it) + ":" + getExprHash(e);
-			case EBreak: "BR";
-			case EContinue: "CT";
+				hashCombine(hashCombine(hashCombine(18, hashString(v)), getExprHash(it)), getExprHash(e));
+			case EBreak: 19;
+			case EContinue: 20;
 			case EFunction(args, e, name, ret, isPublic, isStatic, isOverride, isPrivate, isFinal, isInline):
-				"FUN:" + name + ":" + getExprHash(e);
+				h = hashCombine(21, name != null ? hashString(name) : 0);
+				hashCombine(h, getExprHash(e));
 			case EReturn(e):
-				"RET:" + (e != null ? getExprHash(e) : "null");
+				e != null ? hashCombine(22, getExprHash(e)) : 22;
 			case EArray(e, index):
-				"ARR:" + getExprHash(e) + ":" + getExprHash(index);
+				hashCombine(hashCombine(23, getExprHash(e)), getExprHash(index));
 			case EArrayDecl(exprs):
-				"AD:[" + [for (e in exprs) getExprHash(e)].join(",") + "]";
+				h = 24;
+				for (e in exprs) h = hashCombine(h, getExprHash(e));
+				h;
 			case ENew(cl, params, paramType):
-				"NEW:" + cl + ":[" + [for (p in params) getExprHash(p)].join(",") + "]";
-			case EThrow(e):
-				"THR:" + getExprHash(e);
+				h = hashCombine(25, hashString(cl));
+				for (p in params) h = hashCombine(h, getExprHash(p));
+				h;
+			case EThrow(e): hashCombine(26, getExprHash(e));
 			case ETry(e, v, t, ecatch):
-				"TRY:" + getExprHash(e) + ":" + getExprHash(ecatch);
+				hashCombine(hashCombine(27, getExprHash(e)), getExprHash(ecatch));
 			case EObject(fl):
-				"OBJ:{" + [for (f in fl) f.name + ":" + getExprHash(f.e)].join(",") + "}";
+				h = 28;
+				for (f in fl) h = hashCombine(hashCombine(h, hashString(f.name)), getExprHash(f.e));
+				h;
 			case ETernary(cond, e1, e2):
-				"TRN:" + getExprHash(cond) + ":" + getExprHash(e1) + ":" + getExprHash(e2);
+				hashCombine(hashCombine(hashCombine(29, getExprHash(cond)), getExprHash(e1)), getExprHash(e2));
 			case ESwitch(e, cases, defaultExpr):
-				"SW:" + getExprHash(e) + ":[" + [for (c in cases) 
-					"[" + [for (v in c.values) getExprHash(v)].join(",") + ":" + getExprHash(c.expr)
-				].join(",") + "]:" + (defaultExpr != null ? getExprHash(defaultExpr) : "null");
+				h = hashCombine(30, getExprHash(e));
+				for (c in cases) {
+					for (v in c.values) h = hashCombine(h, getExprHash(v));
+					h = hashCombine(h, getExprHash(c.expr));
+				}
+				defaultExpr != null ? hashCombine(h, getExprHash(defaultExpr)) : h;
 			case EMeta(name, args, e):
-				"MT:" + name + ":[" + (args != null ? [for (a in args) getExprHash(a)].join(",") : "") + "]:" + getExprHash(e);
-			case ECheckType(e, t):
-				"CT:" + getExprHash(e);
-			case EEnum(en, isAbstract): "EN:" + en.name;
-			case ECast(e, t): "CST:" + getExprHash(e);
-			case ERegex(e, f): "RX:" + e;
+				h = hashCombine(31, hashString(name));
+				if (args != null) for (a in args) h = hashCombine(h, getExprHash(a));
+				hashCombine(h, getExprHash(e));
+			case ECheckType(e, t): hashCombine(32, getExprHash(e));
+			case EEnum(en, isAbstract): hashCombine(33, hashString(en.name));
+			case ECast(e, t): hashCombine(34, getExprHash(e));
+			case ERegex(e, f): hashCombine(hashCombine(35, hashString(e)), hashString(f));
 		}
 	}
 
@@ -220,8 +266,13 @@ class Optimizer {
 			case EImport(_): expr;
 			case EClass(name, fields, extend, interfaces, isFinal):
 				if (debug) stats.classCount++;
-				var optimizedFields = [for (f in fields) optimizeWithCache(f, depth + 1)];
-				Tools.mk(EClass(name, optimizedFields, extend, interfaces, isFinal), expr);
+				var changed = false;
+				var optimizedFields = [for (f in fields) {
+					var opt = optimizeWithCache(f, depth + 1);
+					if (opt != f) changed = true;
+					opt;
+				}];
+				changed ? Tools.mk(EClass(name, optimizedFields, extend, interfaces, isFinal), expr) : expr;
 			case EVar(n, t, e, isPublic, isStatic, isPrivate, isFinal, isInline, get, set, isVar):
 				if (debug) stats.varCount++;
 				var optimizedExpr = e != null ? optimizeWithCache(e, depth + 1) : null;
@@ -230,11 +281,11 @@ class Optimizer {
 					finalConstants.push(optimizedExpr);
 					finalConstantIds.set(n, constId);
 				}
-				Tools.mk(EVar(n, t, optimizedExpr, isPublic, isStatic, isPrivate, isFinal, isInline, get, set, isVar), expr);
+				(optimizedExpr != e) ? Tools.mk(EVar(n, t, optimizedExpr, isPublic, isStatic, isPrivate, isFinal, isInline, get, set, isVar), expr) : expr;
 			case EParent(e):
 				if (debug) stats.parentCount++;
 				var optimized = optimizeWithCache(e, depth + 1);
-				Tools.mk(EParent(optimized), expr);
+				(optimized != e) ? Tools.mk(EParent(optimized), expr) : expr;
 			case EBlock(exprs):
 				if (debug) stats.blockCount++;
 				var oldConstants = finalConstants.copy();
@@ -257,13 +308,22 @@ class Optimizer {
 				}
 				if (cleanedExprs.length == 1) {
 					cleanedExprs[0];
-				} else {
+				} else if (cleanedExprs.length != exprs.length) {
 					Tools.mk(EBlock(cleanedExprs), expr);
+				} else {
+					var changed = false;
+					for (i in 0...cleanedExprs.length) {
+						if (cleanedExprs[i] != exprs[i]) {
+							changed = true;
+							break;
+						}
+					}
+					changed ? Tools.mk(EBlock(cleanedExprs), expr) : expr;
 				}
 			case EField(e, f, s):
 				if (debug) stats.fieldCount++;
 				var optimized = optimizeWithCache(e, depth + 1);
-				Tools.mk(EField(optimized, f, s), expr);
+				(optimized != e) ? Tools.mk(EField(optimized, f, s), expr) : expr;
 			case EBinop(op, e1, e2):
 				if (debug) stats.binopCount++;
 				var optimized1 = optimizeWithCache(e1, depth + 1);
@@ -305,17 +365,13 @@ class Optimizer {
 				}
 			case ECall(e, params):
 				if (debug) stats.callCount++;
+				var paramsChanged = false;
 				var optimizedExpr = optimizeWithCache(e, depth + 1);
-				var optimizedParams = [for (p in params) optimizeWithCache(p, depth + 1)];
-				var paramsChanged = optimizedParams.length != params.length;
-				if (!paramsChanged) {
-					for (i in 0...params.length) {
-						if (optimizedParams[i] != params[i]) {
-							paramsChanged = true;
-							break;
-						}
-					}
-				}
+				var optimizedParams = [for (p in params) {
+					var opt = optimizeWithCache(p, depth + 1);
+					if (opt != p) paramsChanged = true;
+					opt;
+				}];
 				
 				var callOptimized = tryOptimizeCall(optimizedExpr, optimizedParams);
 				if (callOptimized != null) {
@@ -323,11 +379,7 @@ class Optimizer {
 					return callOptimized;
 				}
 				
-				if (optimizedExpr != e || paramsChanged) {
-					Tools.mk(ECall(optimizedExpr, optimizedParams), expr);
-				} else {
-					expr;
-				}
+				(optimizedExpr != e || paramsChanged) ? Tools.mk(ECall(optimizedExpr, optimizedParams), expr) : expr;
 			case EIf(cond, e1, e2):
 				if (debug) stats.ifCount++;
 				var optimizedCond = optimizeWithCache(cond, depth + 1);
@@ -438,38 +490,22 @@ class Optimizer {
 				}
 			case EArrayDecl(exprs, wantedType):
 				if (debug) stats.arrayDeclCount++;
-				var optimizedExprs = [for (e in exprs) optimizeWithCache(e, depth + 1)];
-				var changed = optimizedExprs.length != exprs.length;
-				if (!changed) {
-					for (i in 0...exprs.length) {
-						if (optimizedExprs[i] != exprs[i]) {
-							changed = true;
-							break;
-						}
-					}
-				}
-				if (changed) {
-					Tools.mk(EArrayDecl(optimizedExprs, wantedType), expr);
-				} else {
-					expr;
-				}
+				var changed = false;
+				var optimizedExprs = [for (e in exprs) {
+					var opt = optimizeWithCache(e, depth + 1);
+					if (opt != e) changed = true;
+					opt;
+				}];
+				changed ? Tools.mk(EArrayDecl(optimizedExprs, wantedType), expr) : expr;
 			case ENew(cl, params, paramType):
 				if (debug) stats.newCount++;
-				var optimizedParams = [for (p in params) optimizeWithCache(p, depth + 1)];
-				var changed = optimizedParams.length != params.length;
-				if (!changed) {
-					for (i in 0...params.length) {
-						if (optimizedParams[i] != params[i]) {
-							changed = true;
-							break;
-						}
-					}
-				}
-				if (changed) {
-					Tools.mk(ENew(cl, optimizedParams, paramType), expr);
-				} else {
-					expr;
-				}
+				var changed = false;
+				var optimizedParams = [for (p in params) {
+					var opt = optimizeWithCache(p, depth + 1);
+					if (opt != p) changed = true;
+					opt;
+				}];
+				changed ? Tools.mk(ENew(cl, optimizedParams, paramType), expr) : expr;
 			case EThrow(e):
 				if (debug) stats.throwCount++;
 				var optimized = optimizeWithCache(e, depth + 1);
@@ -497,16 +533,12 @@ class Optimizer {
 				}
 			case EObject(fl):
 				if (debug) stats.objectCount++;
-				var optimizedFields = [for (f in fl) {name: f.name, e: optimizeWithCache(f.e, depth + 1)}];
-				var changed = optimizedFields.length != fl.length;
-				if (!changed) {
-					for (i in 0...fl.length) {
-						if (optimizedFields[i].e != fl[i].e) {
-							changed = true;
-							break;
-						}
-					}
-				}
+				var changed = false;
+				var optimizedFields = [for (f in fl) {
+					var opt = optimizeWithCache(f.e, depth + 1);
+					if (opt != f.e) changed = true;
+					{name: f.name, e: opt};
+				}];
 				if (changed) {
 					var objectFields:Array<ObjectField> = [];
 					for (f in optimizedFields) {
