@@ -649,7 +649,7 @@ class Interp {
 	}
 
 	inline function getProperty(o:Null<Dynamic>, n:String, allowProperty:Bool = true):Dynamic {
-		if(o != null && allowProperty && o is Property)
+		if(allowProperty && o != null && o is Property)
 			return cast(o, Property).callGetter(n);
 		else
 			return o;
@@ -673,12 +673,12 @@ class Interp {
 			}
 		}
 
-		for(map in [variables, publicVariables, staticVariables]) {
-			if(map.exists(id)) {
-				var r:Null<Dynamic> = map.get(id);
-				return getProperty(r, id, allowProperty);
-			}
-		}
+		if (variables.exists(id))
+			return getProperty(variables.get(id), id, allowProperty);
+		if (publicVariables.exists(id))
+			return getProperty(publicVariables.get(id), id, allowProperty);
+		if (staticVariables.exists(id))
+			return getProperty(staticVariables.get(id), id, allowProperty);
 
 		if(customClasses.exists(id))
 			return customClasses.get(id);
@@ -938,8 +938,6 @@ class Interp {
 				}
 
 				variables.set(en.name, enumThingy);
-			case ECast(e, _): // TODO
-				return expr(e);
 			case ERegex(e, f):
 				return new EReg(e, f);
 			case EConst(c):
@@ -1278,7 +1276,7 @@ class Interp {
 				var match = false;
 				for (c in cases) {
 					for (v in c.values) {
-						// https://github.com/FunkinCrew/hscript/blob/funkin-dev/hscript/Interp.hx#L611
+						// https://github.com/FunkinCrew/polymod/blob/5d47a5c7c6b4e0cb94bd8fd45d012ca93bde9ab7/polymod/hscript/_internal/Interp.hx#L613
 						switch (Tools.expr(v)) {
 							case ECall(e, params):
 								switch (Tools.expr(e)) {
@@ -1340,7 +1338,7 @@ class Interp {
 
 				isBypassAccessor = oldAccessor;
 				return val;
-			case ECheckType(e, _):
+			case ECheckType(e, _), ECast(e, _):
 				return expr(e);
 		}
 		return null;
