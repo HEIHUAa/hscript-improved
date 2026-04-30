@@ -543,7 +543,7 @@ class Interp {
 				#if hscriptPos
 				errorHandler(new Error(ECustom(errStr), curExpr.pmin, curExpr.pmax, curExpr.origin, curExpr.line));
 				#else
-				errorHandler(new Error(ECustom(errStr)));
+				errorHandler(Error.ECustom(errStr));
 				#end
 			} else {
 				throw e;
