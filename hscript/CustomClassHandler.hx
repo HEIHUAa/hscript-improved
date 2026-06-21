@@ -60,23 +60,19 @@ class CustomClassHandler implements IHScriptCustomConstructor implements IHScrip
 			if(!__interp.variables.exists(f))
 				__interp.variables.set(f, v);
 
-		for(e in fields.copy()) {
-			var validField:Bool = false;
+		for(i => e in fields.copy()) {
+			var isValid:Bool = false;
 			var staticField:Bool = false;
-			var fieldName:String = "";
+			var fieldName:String = null;
 			switch (Tools.expr(e)) {
-				case EVar(n, _, _, _, isStatic):
-					validField = true;
-					staticField = isStatic;
-					fieldName = n;
-				case EFunction(_, _, n, _, _, isStatic, _, _, _, _):
-					validField = true;
+				case EVar(n, _, _, _, isStatic) | EFunction(_, _, n, _, _, isStatic):
+					isValid = true;
 					staticField = isStatic;
 					fieldName = n;
 				default:
 			}
 
-			if(staticField && validField) {
+			if(staticField && isValid) {
 				__interp.exprReturn(e);
 				__staticFields.push(fieldName);
 				fields.remove(e);
@@ -88,7 +84,7 @@ class CustomClassHandler implements IHScriptCustomConstructor implements IHScrip
 		return new CustomClass(this, args);
 
 	@:allow(hscript.Interp)
-	function hasField(name:String) {
+	inline function hasField(name:String) {
         return __staticFields.contains(name);
     }
 
@@ -96,9 +92,9 @@ class CustomClassHandler implements IHScriptCustomConstructor implements IHScrip
         var f = __interp.variables.get(name);
         if(f is Property && allowProperty) {
             var prop:Property = cast f;
-            prop.__allowSetGet = this.__allowSetGet;
-            var r = prop.callGetter(name);
-            prop.__allowSetGet = null;
+            //prop.__allowSetGet = this.__allowSetGet;
+            var r = prop.get(!__allowSetGet);
+            //prop.__allowSetGet = true;
             return r;
         }
         return f;
@@ -108,9 +104,9 @@ class CustomClassHandler implements IHScriptCustomConstructor implements IHScrip
         var f = getField(name, false);
         if(f is Property) {
             var prop:Property = cast f;
-            prop.__allowSetGet = this.__allowSetGet;
-            var r = prop.callSetter(name, val);
-            prop.__allowSetGet = null;
+            //prop.__allowSetGet = this.__allowSetGet;
+            var r = prop.set(val, !__allowSetGet);
+            //prop.__allowSetGet = true;
             return r;
         }
         __interp.variables.set(name, val);
@@ -119,10 +115,9 @@ class CustomClassHandler implements IHScriptCustomConstructor implements IHScrip
 
 	public function hget(name:String):Dynamic {
 		if(name == 'new') {
-			var __constructor = Reflect.makeVarArgs(function(args:Array<Dynamic>) {
-				return this.hnew(args);
+			return Reflect.makeVarArgs(function(args:Array<Dynamic>):Dynamic {
+				return inline this.hnew(args);
 			});
-			return __constructor;
 		}
 		
 		if(hasField(name)) {
