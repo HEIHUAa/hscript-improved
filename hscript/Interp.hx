@@ -86,6 +86,7 @@ class RedeclaredVar {
 @:access(hscript.CustomClass)
 @:analyzer(optimize, local_dce, fusion, user_var_fusion)
 class Interp {
+	private static var _EMPTY_ARGS:Array<Dynamic> = [];
 	private var hasScriptObject(default, null):Bool = false;
 	private var _scriptObjectType(default, null):ScriptObjectType = SNull;
 
@@ -311,10 +312,8 @@ class Interp {
 					return prop.set(v, isBypassAccessor);
 				} else {
 					l.r = v;
-					if (l.depth == 0) {
-						varLocationCache.remove(id);
+					if (l.depth == 0)
 						setVar(id, v);
-					}
 				}
 				// TODO
 			case EField(e, f, s):
@@ -395,10 +394,8 @@ class Interp {
 						return prop.set(v, isBypassAccessor);
 					}
 					l.r = v;
-					if (l.depth == 0) {
-						varLocationCache.remove(id);
-						setVar(id, v);
-					}
+				if (l.depth == 0)
+					setVar(id, v);
 				}
 			case EField(e, f, s):
 				var obj = expr(e);
@@ -451,7 +448,6 @@ class Interp {
 						else
 							l.r = v + delta;
 					}
-					if (l.depth == 0) varLocationCache.remove(id);
 					return v;
 				} else {
 					var v:Dynamic = resolve(id, true, false);
@@ -1126,7 +1122,7 @@ class Interp {
 					default: error(EInvalidOp(op.toString()));
 				}
 			case ECall(e, params):
-				var args:Array<Dynamic> = makeArgs(params);
+				var args:Array<Dynamic> = (params.length > 0) ? makeArgs(params) : _EMPTY_ARGS;
 
 				switch (Tools.expr(e)) {
 					case EField(e, f, s):
@@ -1344,7 +1340,7 @@ class Interp {
 					return arr[index];
 				}
 			case ENew(cl, params, _):
-				var a:Array<Dynamic> = makeArgs(params);
+				var a:Array<Dynamic> = (params.length > 0) ? makeArgs(params) : _EMPTY_ARGS;
 				return cnew(cl, a);
 			case EThrow(e):
 				throw expr(e);
